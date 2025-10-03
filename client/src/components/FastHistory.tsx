@@ -1,24 +1,39 @@
+// src/components/FastHistory.tsx
+
 import React, { useState, useEffect } from 'react';
 import {
     Typography, Box, Card, CircularProgress, Alert,
     Accordion, AccordionSummary, AccordionDetails, List, ListItem,
     ListItemText, Grid, Divider, Button, TextField, Snackbar,
     Collapse,
-    // ADDED DIALOG IMPORTS
     Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight'; // CORRECTED IMPORT PATH
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { AccessTime, Event, Notes, WaterDrop, WbSunny, Send } from '@mui/icons-material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { format, parseISO } from 'date-fns';
 import axios from 'axios';
 import type { FastRecord, Note } from '../types';
 
+// 🔑 ZUSTAND CHANGE: Import the custom authentication store
+import { useAuthStore } from '../store/authStore'; 
+
 
 const API_URL = 'http://localhost:3001/api';
 
+// 🔑 ZUSTAND CHANGE: Remove the prop interface as we are using the store directly
+// interface FastHistoryProps {
+//     token: string | null;
+// }
+
+// 🔑 ZUSTAND CHANGE: Component no longer accepts token as a prop
 const FastHistory: React.FC = () => {
+    
+    // 🔑 ZUSTAND CHANGE: Get token and authentication status directly from the store
+    const token = useAuthStore((state) => state.token);
+    const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+
     const [history, setHistory] = useState<FastRecord[]>([]);
     const [loading, setLoading] = useState<boolean>(true);
     const [error, setError] = useState<string | null>(null);
@@ -32,22 +47,48 @@ const FastHistory: React.FC = () => {
     const [isConfirmDialogOpen, setIsConfirmDialogOpen] = useState(false);
     const [fastToDeleteId, setFastToDeleteId] = useState<string | null>(null);
 
+    // 🔑 AUTH CHANGE: Helper function to get Authorization Headers (uses state variable 'token')
+    const getAuthHeaders = () => ({
+        headers: {
+            // Include the token in the 'Authorization' header in 'Bearer <token>' format
+            'Authorization': `Bearer ${token}`, 
+        },
+    });
+
     useEffect(() => {
         const fetchHistory = async () => {
+            // 🔑 AUTH CHANGE: Check for token before fetching protected data
+            if (!token) {
+                setLoading(false);
+                setError('You must be logged in to view your fast history.');
+                return;
+            }
+
             try {
-                const response = await axios.get<FastRecord[]>(`${API_URL}/fast-history`);
+                // 🔑 AUTH CHANGE: Pass the Authorization header to the request
+                const response = await axios.get<FastRecord[]>(
+                    `${API_URL}/fast-history`,
+                    getAuthHeaders() 
+                );
                 setHistory(response.data);
-            } catch (err) {
-                setError('Failed to load fast history. Ensure your Node.js backend server is running.');
+                setError(null); // Clear any previous auth error
+            } catch (err: any) {
+                // Handle 401 Unauthorized errors from the server
+                if (err.response && err.response.status === 401) {
+                    setError('Session expired or unauthorized. Please log in again.');
+                } else {
+                    setError('Failed to load fast history. Ensure your Node.js backend server is running.');
+                }
                 console.error(err);
             } finally {
                 setLoading(false);
             }
         };
         fetchHistory();
-    }, []);
+    }, [token]); // 🔑 AUTH CHANGE: Re-run effect when the token changes
 
     const handleEmailHistory = async () => {
+        // NOTE: This route is UNPROTECTED on the server side, so it remains unchanged.
         if (!email || !email.includes('@')) {
             setSnackbarMessage('❌ Please enter a valid email address.');
             setSnackbarOpen(true);
@@ -62,7 +103,7 @@ const FastHistory: React.FC = () => {
 
         setSendingEmail(true);
         try {
-            const response = await axios.post(`${API_URL}/email-history`, { email });
+            const response = await axios.post(`${API_URL}/email-history`, { recipientEmail: email });
 
             setSnackbarMessage(response.data.message || '✅ Fast history email request sent successfully!');
             setSnackbarOpen(true);
@@ -75,7 +116,7 @@ const FastHistory: React.FC = () => {
             setSendingEmail(false);
         }
     };
-
+    
     // 1. Function to OPEN the Confirmation Dialog
     const handleOpenDeleteConfirm = (event: React.MouseEvent, fastId: string) => {
         event.stopPropagation();
@@ -83,22 +124,35 @@ const FastHistory: React.FC = () => {
         setIsConfirmDialogOpen(true);
     };
     
-    // 2. Function to EXECUTE the Delete after Confirmation
+    // 2. Function to EXECUTE the Delete after Confirmation (PROTECTED)
     const handleConfirmDelete = async () => {
         setIsConfirmDialogOpen(false); // Close dialog immediately
-        if (!fastToDeleteId) return;
+        // 🔑 ADDED: Check for token
+        if (!fastToDeleteId || !token) return; 
 
         try {
             setLoading(true);
-            await axios.delete(`${API_URL}/fast-history/${fastToDeleteId}`);
+            // 🔑 AUTH CHANGE: Pass the Authorization header to the request
+            await axios.delete(
+                `${API_URL}/fast-history/${fastToDeleteId}`,
+                getAuthHeaders()
+            );
 
             setHistory(prevHistory => prevHistory.filter(fast => fast._id !== fastToDeleteId));
 
             setSnackbarMessage('✅ Fast record deleted successfully!');
             setSnackbarOpen(true);
-        } catch (err) {
+        } catch (err: any) {
             console.error('Failed to delete fast:', err);
-            setSnackbarMessage('❌ Failed to delete fast record. Check server logs.');
+            
+            const errorMessage = err.response?.data?.message || '❌ Failed to delete fast record. Check server logs.';
+            
+            // 🔑 ADDED: Check for unauthorized deletion
+            if (err.response && err.response.status === 404) {
+                 setSnackbarMessage('❌ Record not found or you are not authorized to delete it.');
+            } else {
+                setSnackbarMessage(errorMessage);
+            }
             setSnackbarOpen(true);
         } finally {
             setLoading(false);
@@ -118,6 +172,13 @@ const FastHistory: React.FC = () => {
     if (loading) {
         return <Box sx={{ display: 'flex', justifyContent: 'center', mt: 5 }}><CircularProgress color="secondary" /></Box>;
     }
+    
+    // 🔑 ZUSTAND CHANGE: Display a distinct message if not authenticated
+    if (!isAuthenticated) {
+        return <Alert severity="warning" sx={{ mt: 5 }}>Please log in to view your fasting history.</Alert>;
+    }
+    
+    // Check for other errors only if authenticated
     if (error) {
         return <Alert severity="error" sx={{ mt: 5 }}>{error}</Alert>;
     }

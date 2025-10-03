@@ -1,12 +1,17 @@
-// server.js - Pre-Fix, Pre-Auth State
+// server.js - Authenticated State
 
-require('dotenv').config(); 
+require('dotenv').config(); 
 
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const nodemailer = require('nodemailer');
 const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken'); // 🔑 NEW: Require JWT for middleware
+
+// 🔑 NEW: Require the User model and Auth routes
+const User = require('./models/User'); 
+const authRoutes = require('./routes/authRoutes');
 
 // Require the Fast model (assuming it's in ./models/Fast)
 const Fast = require('./models/Fast');
@@ -14,249 +19,290 @@ const Fast = require('./models/Fast');
 const app = express();
 const PORT = 3001;
 
+// --- AUTH CONFIG ---
+const JWT_SECRET = process.env.JWT_SECRET;
+// -------------------
+
 // --- DATABASE CONNECTION (Using .env) ---
-const DB_URL = process.env.MONGO_URI; 
+const DB_URL = process.env.MONGO_URI; 
 
 mongoose.connect(DB_URL)
-  .then(() => console.log('MongoDB Atlas connected successfully! 🚀'))
-  .catch(err => console.error('MongoDB connection error:', err));
+  .then(() => console.log('MongoDB Atlas connected successfully! 🚀'))
+  .catch(err => console.error('MongoDB connection error:', err));
 // ----------------------------------------
 
 
 // --- EMAIL CONFIGURATION (Using .env) ---
-const EMAIL_USER = process.env.EMAIL_USER;  
-const EMAIL_PASS = process.env.EMAIL_PASS;  
+const EMAIL_USER = process.env.EMAIL_USER;  
+const EMAIL_PASS = process.env.EMAIL_PASS;  
 
 // Configure the Nodemailer Transporter
 const transporter = nodemailer.createTransport({
-    service: 'gmail', 
-    auth: {
-        user: EMAIL_USER,
-        pass: EMAIL_PASS 
-    }
+    service: 'gmail', 
+    auth: {
+        user: EMAIL_USER,
+        pass: EMAIL_PASS 
+    }
 });
 // ----------------------------------------
 
 
 // --- Middleware ---
 app.use(cors({
-    origin: 'http://localhost:5173' 
+    origin: 'http://localhost:5173' 
 }));
 app.use(bodyParser.json());
 
 
-// 1. Endpoint to save a completed fast (Anonymous Access)
-app.post('/api/save-fast', async (req, res) => {
-    const { startTime, endTime, durationHours, fastType, notes } = req.body;
-    
-    try {
-        const newFast = new Fast({ 
-            startTime,
-            endTime,
-            durationHours,
-            fastType,
-            notes,
-        });
+// 🔑 NEW: JWT Authentication Middleware
+const requireAuth = (req, res, next) => {
+    const authHeader = req.headers.authorization;
 
-        await newFast.save();
-        res.status(201).send({ message: 'Fast successfully logged!', fast: newFast });
-    } catch (error) {
-        console.error('Error logging fast:', error);
-        res.status(500).send({ message: 'Failed to log fast statistics.', error: error.message });
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        // If no token is provided, access is denied
+        return res.status(401).json({ message: 'Access denied. No token provided.' });
     }
+
+    const token = authHeader.split(' ')[1]; // Extract token from "Bearer <token>"
+
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        // Attach the user ID to the request object
+        req.user = { id: decoded.id }; 
+        next();
+    } catch (err) {
+        return res.status(401).json({ message: 'Invalid token.' });
+    }
+};
+
+// 🔑 NEW: Mount the Auth Routes
+app.use('/api/auth', authRoutes);
+
+
+// 1. Endpoint to save a completed fast (PROTECTED)
+app.post('/api/save-fast', requireAuth, async (req, res) => { // 🔑 ADDED: requireAuth
+    const { startTime, endTime, durationHours, fastType, notes } = req.body;
+    const userId = req.user.id; // 🔑 NEW: Get user ID from the token
+    
+    try {
+        const newFast = new Fast({ 
+            userId, // 🔑 NEW: Link the fast to the user
+            startTime,
+            endTime,
+            durationHours,
+            fastType,
+            notes,
+        });
+
+        await newFast.save();
+        res.status(201).send({ message: 'Fast successfully logged!', fast: newFast });
+    } catch (error) {
+        console.error('Error logging fast:', error);
+        res.status(500).send({ message: 'Failed to log fast statistics.', error: error.message });
+    }
 });
 
 
-// 2. Endpoint to fetch all logged fasts (Anonymous Access)
-app.get('/api/fast-history', async (req, res) => {
-    try {
-        const history = await Fast.find().sort({ endTime: -1 }); 
-        res.status(200).send(history);
-    } catch (error) {
-        console.error('Error fetching history:', error);
-        res.status(500).send({ message: 'Failed to retrieve fast history.', error: error.message });
-    }
+// 2. Endpoint to fetch all logged fasts (PROTECTED - only fetching *user's* fasts)
+app.get('/api/fast-history', requireAuth, async (req, res) => { // 🔑 ADDED: requireAuth
+    const userId = req.user.id; // 🔑 NEW: Get user ID from the token
+    try {
+        // 🔑 MODIFIED: Find only fasts belonging to the authenticated user
+        const history = await Fast.find({ userId }).sort({ endTime: -1 }); 
+        res.status(200).send(history);
+    } catch (error) {
+        console.error('Error fetching history:', error);
+        res.status(500).send({ message: 'Failed to retrieve fast history.', error: error.message });
+    }
 });
 
 
-// 3. Email Current Status Endpoint (Anonymous Access)
+// 3. Email Current Status Endpoint (ANONYMOUS - UNCHANGED)
 app.post('/api/send-report', async (req, res) => {
-    const { startTime, currentHours, fastType, notes, recipientEmail } = req.body;
+    const { startTime, currentHours, fastType, notes, recipientEmail } = req.body;
 
-    if (!recipientEmail || !startTime) {
-        return res.status(400).send({ message: 'Missing required data (recipient or start time).' });
-    }
+    if (!recipientEmail || !startTime) {
+        return res.status(400).send({ message: 'Missing required data (recipient or start time).' });
+    }
 
-    console.log(`Attempting to send report to: ${recipientEmail}`);
+    console.log(`Attempting to send report to: ${recipientEmail}`);
 
-    const notesHtml = notes.map(note => 
-        `<li style="margin-bottom: 5px;"><strong>${new Date(note.time).toLocaleTimeString()}</strong> - ${note.text}</li>`
-    ).join('');
+    const notesHtml = notes.map(note => 
+        `<li style="margin-bottom: 5px;"><strong>${new Date(note.time).toLocaleTimeString()}</strong> - ${note.text}</li>`
+    ).join('');
 
-    const mailOptions = {
-        from: `Fasting Tracker Report <${EMAIL_USER}>`,
-        to: recipientEmail,
-        subject: `Fasting Status Report - ${currentHours.toFixed(2)} Hours`,
-        html: `
-            <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                <h2 style="color: #6200EE;">Fasting Report Summary</h2>
-                <p><strong>Fast Start Time:</strong> ${new Date(startTime).toLocaleString()}</p>
-                <p><strong>Current Hours Fasted:</strong> ${currentHours.toFixed(2)} hours</p>
-                <p><strong>Fast Type:</strong> <span style="font-weight: bold; text-transform: uppercase; color: ${fastType === 'dry' ? '#D32F2F' : '#2196F3'};">${fastType} Fast</span></p>
-                
-                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
-                
-                <h3 style="color: #6200EE;">Fasting Notes:</h3>
-                ${notes.length > 0 ? `<ul style="padding-left: 20px; list-style-type: none;">${notesHtml}</ul>` : '<p>No notes logged during this fast.</p>'}
-            </div>
-        `
-    };
+    const mailOptions = {
+        from: `Fasting Tracker Report <${EMAIL_USER}>`,
+        to: recipientEmail,
+        subject: `Fasting Status Report - ${currentHours.toFixed(2)} Hours`,
+        html: `
+            <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <h2 style="color: #6200EE;">Fasting Report Summary</h2>
+                <p><strong>Fast Start Time:</strong> ${new Date(startTime).toLocaleString()}</p>
+                <p><strong>Current Hours Fasted:</strong> ${currentHours.toFixed(2)} hours</p>
+                <p><strong>Fast Type:</strong> <span style="font-weight: bold; text-transform: uppercase; color: ${fastType === 'dry' ? '#D32F2F' : '#2196F3'};">${fastType} Fast</span></p>
+                
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+                
+                <h3 style="color: #6200EE;">Fasting Notes:</h3>
+                ${notes.length > 0 ? `<ul style="padding-left: 20px; list-style-type: none;">${notesHtml}</ul>` : '<p>No notes logged during this fast.</p>'}
+            </div>
+        `
+    };
 
-    try {
-        await transporter.sendMail(mailOptions);
-        console.log('Email sent successfully!');
-        res.status(200).send({ message: 'Email sent successfully!' });
-    } catch (error) {
-        console.error('Error sending email:', error.message);
-        res.status(500).send({ 
-            message: 'Failed to send email. Check Nodemailer configuration.', 
-            error: error.message 
-        });
-    }
+    try {
+        await transporter.sendMail(mailOptions);
+        console.log('Email sent successfully!');
+        res.status(200).send({ message: 'Email sent successfully!' });
+    } catch (error) {
+        console.error('Error sending email:', error.message);
+        res.status(500).send({ 
+            message: 'Failed to send email. Check Nodemailer configuration.', 
+            error: error.message 
+        });
+    }
 });
 
 
-// 4. Endpoint to email the entire history (Anonymous Access)
+// 4. Endpoint to email the entire history (ANONYMOUS - UNCHANGED)
 app.post('/api/email-history', async (req, res) => {
-    const { recipientEmail } = req.body;
+    const { recipientEmail } = req.body;
 
-    if (!recipientEmail) {
-        return res.status(400).send({ message: 'Missing recipient email.' });
-    }
+    if (!recipientEmail) {
+        return res.status(400).send({ message: 'Missing recipient email.' });
+    }
 
-    try {
-        const history = await Fast.find().sort({ endTime: -1 }); 
+    // NOTE: This route still fetches ALL records in the database (since it's unprotected).
+    // In a final auth setup, you should make this protected and use { userId } in Fast.find()
+    try {
+        const history = await Fast.find().sort({ endTime: -1 }); 
 
-        if (history.length === 0) {
-            return res.status(404).send({ message: 'No fasts found to report.' });
-        }
+        if (history.length === 0) {
+            return res.status(404).send({ message: 'No fasts found to report.' });
+        }
 
-        const historyHtml = history.map(fast => {
-            const startDate = new Date(fast.startTime).toLocaleString();
-            const endDate = new Date(fast.endTime).toLocaleString();
-            const notesHtml = fast.notes.map(note => 
-                `<li>- ${new Date(note.time).toLocaleTimeString()} : ${note.text}</li>`
-            ).join('');
+        const historyHtml = history.map(fast => {
+            const startDate = new Date(fast.startTime).toLocaleString();
+            const endDate = new Date(fast.endTime).toLocaleString();
+            const notesHtml = fast.notes.map(note => 
+                `<li>- ${new Date(note.time).toLocaleTimeString()} : ${note.text}</li>`
+            ).join('');
 
-            return `
-                <div style="border: 1px solid #ddd; padding: 10px; margin-bottom: 15px; border-radius: 5px;">
-                    <h4 style="color: #6200EE; margin-top: 0;">${fast.durationHours.toFixed(2)} Hours (${fast.fastType.toUpperCase()})</h4>
-                    <p style="margin: 5px 0;"><strong>Completed:</strong> ${endDate}</p>
-                    <p style="margin: 5px 0;"><strong>Started:</strong> ${startDate}</p>
-                    ${fast.notes.length > 0 ? 
-                        `<strong>Notes:</strong><ul style="list-style-type: none; padding-left: 10px; font-size: 0.9em;">${notesHtml}</ul>` : 
-                        '<p style="font-style: italic;">No notes logged.</p>'
-                    }
-                </div>
-            `;
-        }).join('');
+            return `
+                <div style="border: 1px solid #ddd; padding: 10px; margin-bottom: 15px; border-radius: 5px;">
+                    <h4 style="color: #6200EE; margin-top: 0;">${fast.durationHours.toFixed(2)} Hours (${fast.fastType.toUpperCase()})</h4>
+                    <p style="margin: 5px 0;"><strong>Completed:</strong> ${endDate}</p>
+                    <p style="margin: 5px 0;"><strong>Started:</strong> ${startDate}</p>
+                    ${fast.notes.length > 0 ? 
+                        `<strong>Notes:</strong><ul style="list-style-type: none; padding-left: 10px; font-size: 0.9em;">${notesHtml}</ul>` : 
+                        '<p style="font-style: italic;">No notes logged.</p>'
+                    }
+                </div>
+            `;
+        }).join('');
 
-        const mailOptions = {
-            from: `Fasting Tracker Report <${EMAIL_USER}>`,
-            to: recipientEmail,
-            subject: `Complete Fasting History Report (${history.length} Entries)`,
-            html: `
-                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                    <h2 style="color: #6200EE;">Complete Fasting History</h2>
-                    <p>Attached below are all ${history.length} logged fasts from your tracker.</p>
-                    <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
-                    ${historyHtml}
-                </div>
-            `
-        };
+        const mailOptions = {
+            from: `Fasting Tracker Report <${EMAIL_USER}>`,
+            to: recipientEmail,
+            subject: `Complete Fasting History Report (${history.length} Entries)`,
+            html: `
+                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                    <h2 style="color: #6200EE;">Complete Fasting History</h2>
+                    <p>Attached below are all ${history.length} logged fasts from your tracker.</p>
+                    <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+                    ${historyHtml}
+                </div>
+            `
+        };
 
-        await transporter.sendMail(mailOptions);
-        console.log('History email sent successfully!');
-        res.status(200).send({ message: 'Complete history emailed successfully!' });
+        await transporter.sendMail(mailOptions);
+        console.log('History email sent successfully!');
+        res.status(200).send({ message: 'Complete history emailed successfully!' });
 
-    } catch (error) {
-        console.error('Error emailing history:', error);
-        res.status(500).send({ 
-            message: 'Failed to email history. Check Nodemailer configuration and database access.', 
-            error: error.message 
-        });
-    }
+    } catch (error) {
+        console.error('Error emailing history:', error);
+        res.status(500).send({ 
+            message: 'Failed to email history. Check Nodemailer configuration and database access.', 
+            error: error.message 
+        });
+    }
 });
 
 
-// 5. DELETE A FAST RECORD BY ID (Anonymous Access)
-app.delete('/api/fast-history/:id', async (req, res) => {
-    const { id } = req.params;
-    
-    console.log(`Attempting to delete fast record with ID: ${id}`);
+// 5. DELETE A FAST RECORD BY ID (PROTECTED)
+app.delete('/api/fast-history/:id', requireAuth, async (req, res) => { // 🔑 ADDED: requireAuth
+    const { id } = req.params;
+    const userId = req.user.id; // 🔑 NEW: Get user ID from the token
+    
+    console.log(`Attempting to delete fast record with ID: ${id} for user ${userId}`);
 
-    if (!id) {
-        return res.status(400).json({ message: 'Fast ID is required.' });
-    }
+    if (!id) {
+        return res.status(400).json({ message: 'Fast ID is required.' });
+    }
 
-    try {
-        const deletedFast = await Fast.findByIdAndDelete(id); 
+    try {
+        // 🔑 MODIFIED: Find and delete ONLY if the fast belongs to the authenticated user
+        const deletedFast = await Fast.findOneAndDelete({ _id: id, userId });  
 
-        if (!deletedFast) {
-            return res.status(404).json({ message: 'Fast record not found in the database.' });
-        }
+        if (!deletedFast) {
+            // Updated status message to reflect authorization check
+            return res.status(404).json({ message: 'Fast record not found or access denied.' });
+        }
 
-        console.log(`Successfully deleted fast: ${id}`);
-        res.status(200).json({ message: 'Fast record deleted successfully.' });
+        console.log(`Successfully deleted fast: ${id}`);
+        res.status(200).json({ message: 'Fast record deleted successfully.' });
 
-    } catch (error) {
-        console.error('Error deleting fast record (detailed):', error.message);
-        
-        if (error.name === 'CastError' && error.kind === 'ObjectId') {
-            return res.status(400).json({ message: 'Invalid Fast ID format.', detailedError: error.message });
-        }
+    } catch (error) {
+        console.error('Error deleting fast record (detailed):', error.message);
+        
+        if (error.name === 'CastError' && error.kind === 'ObjectId') {
+            return res.status(400).json({ message: 'Invalid Fast ID format.', detailedError: error.message });
+        }
 
-        res.status(500).json({ message: 'Server error during deletion.', detailedError: error.message });
-    }
+        res.status(500).json({ message: 'Server error during deletion.', detailedError: error.message });
+    }
 });
 
-// 6. DELETE A NOTE from a logged fast (Anonymous Access)
-app.patch('/api/fast-history/:fastId/notes', async (req, res) => {
-    const { fastId } = req.params;
-    const { noteId } = req.body;  
+// 6. DELETE A NOTE from a logged fast (PROTECTED)
+app.patch('/api/fast-history/:fastId/notes', requireAuth, async (req, res) => { // 🔑 ADDED: requireAuth
+    const { fastId } = req.params;
+    const { noteId } = req.body; 
+    const userId = req.user.id; // 🔑 NEW: Get user ID from the token
+  
 
-    if (!fastId || !noteId) {
-        return res.status(400).json({ message: 'Fast ID and Note ID are required for deletion.' });
-    }
+    if (!fastId || !noteId) {
+        return res.status(400).json({ message: 'Fast ID and Note ID are required for deletion.' });
+    }
 
-    try {
-        const result = await Fast.updateOne(
-            { _id: fastId }, 
-            { $pull: { notes: { id: noteId } } } 
-        );
+    try {
+        // 🔑 MODIFIED: Update the fast ONLY if it belongs to the authenticated user
+        const result = await Fast.updateOne(
+            { _id: fastId, userId }, 
+            { $pull: { notes: { id: noteId } } } 
+        );
 
-        if (result.matchedCount === 0) {
-            return res.status(404).json({ message: 'Fast log not found.' });
-        }
-        
-        if (result.modifiedCount === 0 && result.matchedCount === 1) {
-             console.log(`Fast found but note ${noteId} was not present (already deleted?).`);
-        }
+        if (result.matchedCount === 0) {
+            return res.status(404).json({ message: 'Fast log not found or access denied.' });
+        }
+        
+        if (result.modifiedCount === 0 && result.matchedCount === 1) {
+             console.log(`Fast found but note ${noteId} was not present (already deleted?).`);
+        }
 
-        console.log(`Note ${noteId} successfully deleted from fast ${fastId}.`);
-        res.status(200).json({ message: 'Note deleted successfully.' });
-        
-    } catch (error) {
-        console.error('Error deleting note:', error.message);
-        if (error.name === 'CastError' && error.kind === 'ObjectId') {
-            return res.status(400).json({ message: 'Invalid Fast ID format.', detailedError: error.message });
-        }
-        res.status(500).json({ message: 'Server error during note deletion.', detailedError: error.message });
-    }
+        console.log(`Note ${noteId} successfully deleted from fast ${fastId}.`);
+        res.status(200).json({ message: 'Note deleted successfully.' });
+        
+    } catch (error) {
+        console.error('Error deleting note:', error.message);
+        if (error.name === 'CastError' && error.kind === 'ObjectId') {
+            return res.status(400).json({ message: 'Invalid Fast ID format.', detailedError: error.message });
+        }
+        res.status(500).json({ message: 'Server error during note deletion.', detailedError: error.message });
+    }
 });
 
 
 // 7. Start Server
 app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on http://localhost:${PORT}`);
 });

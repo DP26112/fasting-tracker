@@ -3,7 +3,11 @@
 const mongoose = require('mongoose');
 
 const FastSchema = new mongoose.Schema({
-    
+    userId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true, // New fasts MUST belong to a user
+    },
     startTime: { type: Date, required: true },
     endTime: { type: Date, required: true },
     durationHours: { type: Number, required: true },
