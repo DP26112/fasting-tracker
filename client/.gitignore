@@ -1,0 +1,10 @@
+# dependencies folder
+/node_modules
+
+# build output folders
+/client/dist
+/server/dist
+
+# local environment variables and logs
+.env
+*.log
