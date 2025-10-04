@@ -1,0 +1,1 @@
+Persisting the active fast server-side means a user's timer can be rehydrated on another device/browser after login. If you want cross-device live syncing (e.g., real-time second-by-second), you'd need WebSockets or polling.

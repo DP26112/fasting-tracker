@@ -1,5 +1,13 @@
 {
+  "name": "fasting-tracker",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"node server/server.js\" \"npm --prefix client run dev\""
+  },
   "dependencies": {
     "bcrypt": "^6.0.0"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
   }
 }

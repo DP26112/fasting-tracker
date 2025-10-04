@@ -1,61 +1,77 @@
-// src/store/authStore.ts
+// client/src/store/authStore.ts
 
 import { create } from 'zustand';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 
-const API_URL = 'http://localhost:3001/api/auth';
+// Minimal User type to avoid TS errors (project may define a richer type in ../types)
+type User = {
+  id?: string;
+  email?: string;
+};
 
-// 1. Define the store state and actions
-interface AuthState {
-    token: string | null;
-    isAuthenticated: boolean;
-    authError: string | null;
-    isLoading: boolean;
-    
-    // Actions
-    login: (email: string, password: string) => Promise<void>;
-    logout: () => void;
-    
-    // Utility to get the token, useful for request headers
-    getToken: () => string | null;
-}
+type AuthStore = {
+  user: User | null;
+  token: string | null;
+  isAuthenticated: boolean;
+  isLoading: boolean;
+  authError: string | null;
 
-// 2. Create the Zustand store
-export const useAuthStore = create<AuthState>((set, get) => ({
-    // Initial State: Load token from local storage immediately
-    token: localStorage.getItem('jwtToken'),
-    isAuthenticated: !!localStorage.getItem('jwtToken'),
-    authError: null,
-    isLoading: false,
+  // actions
+  login: (email: string, password: string) => Promise<boolean>;
+  loginWithToken: (token: string, user?: User | null) => void;
+  logout: () => void;
+  initializeAuth: () => Promise<void> | void;
+};
 
-    getToken: () => get().token, // Simple getter for convenience
+const API_BASE = 'http://localhost:3001/api';
 
-    login: async (email, password) => {
-        set({ authError: null, isLoading: true });
-        try {
-            const response = await axios.post(`${API_URL}/login`, { email, password });
-            const newToken = response.data.token;
+export const useAuthStore = create<AuthStore>((set, get) => ({
+  user: null,
+  token: localStorage.getItem('token'),
+  isAuthenticated: !!localStorage.getItem('token'),
+  isLoading: false,
+  authError: null,
 
-            // Update store state
-            set({ 
-                token: newToken, 
-                isAuthenticated: true 
-            });
-            
-            // Persist token
-            localStorage.setItem('jwtToken', newToken);
-        } catch (err: any) {
-            console.error('Login failed:', err);
-            const message = err.response?.data?.message || 'Login failed. Check credentials.';
-            set({ authError: message });
-            throw new Error(message); // Throw to let the calling component handle UI feedback
-        } finally {
-            set({ isLoading: false });
-        }
-    },
+  // Login using email + password
+  login: async (email: string, password: string) => {
+    set({ isLoading: true, authError: null });
+    try {
+      const response = await axios.post(`${API_BASE}/auth/login`, { email, password });
+      const { user, token } = response.data;
 
-    logout: () => {
-        set({ token: null, isAuthenticated: false, authError: null });
-        localStorage.removeItem('jwtToken');
-    },
+      if (!token) {
+        set({ authError: 'No token received from server.', isLoading: false });
+        return false;
+      }
+
+      localStorage.setItem('token', token);
+      set({ token, user: user || null, isAuthenticated: true, isLoading: false, authError: null });
+      return true;
+    } catch (err) {
+      const errorMessage = (err as AxiosError).response?.data?.message || 'Login failed: Invalid credentials.';
+      set({ authError: errorMessage, isLoading: false });
+      console.error('Login failed:', (err as AxiosError).message);
+      return false;
+    }
+  },
+
+  // Use an existing token (e.g. right after registration)
+  loginWithToken: (token: string, user: User | null = null) => {
+    localStorage.setItem('token', token);
+    set({ token, user, isAuthenticated: true, authError: null, isLoading: false });
+  },
+
+  logout: () => {
+    localStorage.removeItem('token');
+    set({ token: null, user: null, isAuthenticated: false });
+  },
+
+  // Optional: initialize on app start (can be called from App or main)
+  initializeAuth: async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+
+    // Optionally verify token with server; keep it simple for now and mark authenticated
+    set({ token, isAuthenticated: true });
+  },
 }));
