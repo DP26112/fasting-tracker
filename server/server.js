@@ -15,6 +15,7 @@ const authRoutes = require('./routes/authRoutes');
 
 // Require the Fast model (assuming it's in ./models/Fast)
 const Fast = require('./models/Fast');
+const ActiveFast = require('./models/ActiveFast');
 
 const app = express();
 const PORT = 3001;
@@ -52,6 +53,33 @@ app.use(cors({
     origin: 'http://localhost:5173' 
 }));
 app.use(bodyParser.json());
+
+// --- Health endpoints ---
+app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', uptime: process.uptime(), name: 'fasting-tracker' });
+});
+
+app.get('/api/ready', (req, res) => {
+    const ready = mongoose && mongoose.connection && mongoose.connection.readyState === 1;
+    if (ready) return res.json({ ready: true });
+    return res.status(503).json({ ready: false });
+});
+
+
+// --- Health endpoints ---
+app.get('/api/health', (req, res) => {
+    res.status(200).json({ status: 'ok', uptime: process.uptime(), time: new Date().toISOString() });
+});
+
+app.get('/api/ready', (req, res) => {
+    // mongoose.connection.readyState: 0 = disconnected, 1 = connected, 2 = connecting, 3 = disconnecting
+    const readyState = mongoose.connection.readyState;
+    if (readyState === 1) {
+        return res.status(200).json({ ready: true });
+    }
+    res.status(503).json({ ready: false, readyState });
+});
+
 
 
 // 🔑 NEW: JWT Authentication Middleware
@@ -95,6 +123,12 @@ app.post('/api/save-fast', requireAuth, async (req, res) => { // 🔑 ADDED: req
         });
 
         await newFast.save();
+        // Remove any active-fast entry for this user now that the fast is completed
+        try {
+            await ActiveFast.deleteOne({ userId });
+        } catch (err) {
+            console.error('Failed to remove active fast after save:', err.message);
+        }
         res.status(201).send({ message: 'Fast successfully logged!', fast: newFast });
     } catch (error) {
         console.error('Error logging fast:', error);
@@ -305,4 +339,98 @@ app.patch('/api/fast-history/:fastId/notes', requireAuth, async (req, res) => { 
 // 7. Start Server
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
+});
+
+// --- Cleanup job for stale ActiveFast entries ---
+// Criteria: ActiveFast.startTime older than 720 hours (30 days)
+// AND user.lastLogin is null or older than 360 hours (15 days)
+const HOUR = 1000 * 60 * 60;
+const STALE_ACTIVE_HOURS = 720; // 30 days
+const INACTIVE_USER_HOURS = 360; // 15 days
+
+async function cleanupStaleActiveFasts() {
+    try {
+        const cutoffActive = new Date(Date.now() - STALE_ACTIVE_HOURS * HOUR);
+        const cutoffLogin = new Date(Date.now() - INACTIVE_USER_HOURS * HOUR);
+
+        // Find ActiveFast docs older than cutoffActive
+        const staleActives = await ActiveFast.find({ startTime: { $lt: cutoffActive } });
+        let deletedCount = 0;
+
+        for (const act of staleActives) {
+            try {
+                const user = await User.findById(act.userId).select('lastLogin');
+                const lastLogin = user?.lastLogin;
+
+                if (!lastLogin || lastLogin < cutoffLogin) {
+                    await ActiveFast.deleteOne({ _id: act._id });
+                    deletedCount++;
+                }
+            } catch (err) {
+                console.error('Error checking user for active-fast cleanup:', err.message);
+            }
+        }
+
+        if (deletedCount > 0) console.log(`Cleanup: removed ${deletedCount} stale ActiveFast(s)`);
+        return deletedCount;
+    } catch (err) {
+        console.error('Error during stale active-fast cleanup:', err.message);
+        return 0;
+    }
+}
+
+// Run cleanup on startup and every 6 hours thereafter
+cleanupStaleActiveFasts();
+setInterval(cleanupStaleActiveFasts, 6 * HOUR);
+
+// Admin endpoint to trigger cleanup on demand (protected)
+app.post('/api/admin/cleanup-active-fasts', requireAuth, async (req, res) => {
+    try {
+        const deleted = await cleanupStaleActiveFasts();
+        return res.status(200).json({ message: 'Cleanup run', deleted });
+    } catch (err) {
+        console.error('Admin cleanup error:', err.message);
+        return res.status(500).json({ message: 'Cleanup failed', error: err.message });
+    }
+});
+
+// --- ACTIVE FAST Endpoints (per-user) ---
+// Get current active fast for the authenticated user
+app.get('/api/active-fast', requireAuth, async (req, res) => {
+    const userId = req.user.id;
+    try {
+        const active = await ActiveFast.findOne({ userId });
+        if (!active) return res.status(404).json({ message: 'No active fast' });
+        res.status(200).json({ active });
+    } catch (err) {
+        console.error('Error fetching active fast:', err.message);
+        res.status(500).json({ message: 'Failed to fetch active fast.' });
+    }
+});
+
+// Create or update active fast for authenticated user
+app.post('/api/active-fast', requireAuth, async (req, res) => {
+    const userId = req.user.id;
+    const { startTime, fastType, notes } = req.body;
+    try {
+        const update = { startTime, fastType, notes, updatedAt: new Date() };
+        const opts = { upsert: true, new: true, setDefaultsOnInsert: true };
+        const active = await ActiveFast.findOneAndUpdate({ userId }, update, opts);
+        res.status(200).json({ message: 'Active fast updated', active });
+    } catch (err) {
+        console.error('Error upserting active fast:', err.message);
+        res.status(500).json({ message: 'Failed to set active fast.' });
+    }
+});
+
+// Delete active fast for authenticated user
+app.delete('/api/active-fast', requireAuth, async (req, res) => {
+    const userId = req.user.id;
+    try {
+        await ActiveFast.deleteOne({ userId });
+        res.status(200).json({ message: 'Active fast cleared' });
+    } catch (err) {
+        console.error('Error clearing active fast:', err.message);
+        res.status(500).json({ message: 'Failed to clear active fast.' });
+    }
 });

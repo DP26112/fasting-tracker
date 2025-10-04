@@ -15,7 +15,8 @@ import axios from 'axios';
 import { nanoid } from 'nanoid';
 
 // 🔑 UPDATED IMPORTS: Use centralized types
-import type { FastRecord, Note } from '../types'; 
+import type { FastRecord, Note, FastType } from '../types'; 
+import { useAuthStore } from '../store/authStore';
 
 import LiveFastDuration from './LiveFastDuration';
 import FastNoteInput from './FastNoteInput';
@@ -34,20 +35,33 @@ type FastType = 'wet' | 'dry';
 */
 // ----------------------------------------
 
+import api from '../utils/api'; // <--- Import the new secured API instance
+
+// ... component logic ...
+
+// Note: The component-level `handleConfirmStopFast` is defined below and uses `api`.
+
 interface FastingTimerProps {
     onFastLogged: () => void;
     darkTheme: any;
 }
 
-const API_URL = 'http://localhost:3001/api';
 
 const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) => {
     // --- State Variables ---
-    const [isFasting, setIsFasting] = useState<boolean>(false);
-    const [startTime, setStartTime] = useState<string | null>(localStorage.getItem('fastStartTime') || null);
-    // FastType is now imported but used the same way
-    const [fastType, setFastType] = useState<FastType>((localStorage.getItem('fastType') as FastType) || 'wet');
-    const [notes, setNotes] = useState<Note[]>(JSON.parse(localStorage.getItem('fastNotes') || '[]'));
+    // Use auth info to namespace localStorage keys per-user (prevents the same timer appearing for different users)
+    const user = useAuthStore(state => state.user);
+    const isAuthenticated = useAuthStore(state => state.isAuthenticated);
+    // Prefer a stable per-user id when available. Use 'guest' for unauthenticated sessions.
+    const storageId = user?.id ?? 'guest';
+    const storageKeyStart = `fastStartTime:${storageId}`;
+    const storageKeyType = `fastType:${storageId}`;
+    const storageKeyNotes = `fastNotes:${storageId}`;
+
+    const [isFasting, setIsFasting] = useState<boolean>(() => !!localStorage.getItem(storageKeyStart));
+    const [startTime, setStartTime] = useState<string | null>(() => localStorage.getItem(storageKeyStart) || null);
+    const [fastType, setFastType] = useState<FastType>(() => (localStorage.getItem(storageKeyType) as FastType) || 'wet');
+    const [notes, setNotes] = useState<Note[]>(() => JSON.parse(localStorage.getItem(storageKeyNotes) || '[]'));
     const [customTimeInput, setCustomTimeInput] = useState<string>('');
     const [showCustomTime, setShowCustomTime] = useState<boolean>(false);
     
@@ -74,17 +88,30 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
         }
     }, [isFasting, startTime]);
 
+    // Persist per-user timer state to namespaced localStorage keys
     useEffect(() => {
         if (isFasting && startTime) {
-            localStorage.setItem('fastStartTime', startTime);
-            localStorage.setItem('fastType', fastType);
-            localStorage.setItem('fastNotes', JSON.stringify(notes));
+            localStorage.setItem(storageKeyStart, startTime);
+            localStorage.setItem(storageKeyType, fastType);
+            localStorage.setItem(storageKeyNotes, JSON.stringify(notes));
         } else if (!isFasting && !startTime) {
-            localStorage.removeItem('fastStartTime');
-            localStorage.removeItem('fastType');
-            localStorage.removeItem('fastNotes');
+            localStorage.removeItem(storageKeyStart);
+            localStorage.removeItem(storageKeyType);
+            localStorage.removeItem(storageKeyNotes);
         }
-    }, [isFasting, startTime, fastType, notes]);
+    }, [isFasting, startTime, fastType, notes, storageKeyStart, storageKeyType, storageKeyNotes]);
+
+    // When the active user/token changes, reload the timer state from that user's storage keys
+    useEffect(() => {
+        setStartTime(localStorage.getItem(storageKeyStart) || null);
+        setFastType((localStorage.getItem(storageKeyType) as FastType) || 'wet');
+        try {
+            setNotes(JSON.parse(localStorage.getItem(storageKeyNotes) || '[]'));
+        } catch {
+            setNotes([]);
+        }
+        setIsFasting(!!localStorage.getItem(storageKeyStart));
+    }, [storageKeyStart, storageKeyType, storageKeyNotes]);
 
     // --- Utility Function ---
     const getPreciseHours = useCallback((): number => {
@@ -109,6 +136,16 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
         setIsFasting(true);
         setNotes([]);
         setCustomTimeInput('');
+        // Persist active fast to server if authenticated
+        (async () => {
+            if (!isAuthenticated) return;
+            try {
+                await api.post('/active-fast', { startTime: time, fastType, notes: [] });
+            } catch (err) {
+                console.error('Failed to persist active fast to server:', err);
+                // ignore; local storage still keeps the active timer
+            }
+        })();
     };
 
     const handleStartNow = () => {
@@ -153,29 +190,55 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
     // 1. Stop Fast: Open Dialog
     const handleStopFast = () => {
         if (!isFasting || !startTime) return;
+        if (!isAuthenticated) {
+            setSnackbarMessage('🔒 Please log in to stop and save your fast.');
+            setSnackbarSeverity('info');
+            setSnackbarOpen(true);
+            return;
+        }
         setIsStopConfirmOpen(true);
     };
 
     // 2. Stop Fast: Confirm Action
+    const [isSaving, setIsSaving] = useState(false);
+
     const handleConfirmStopFast = async () => {
         setIsStopConfirmOpen(false);
+        setIsSaving(true);
 
         const finalHoursFasted = getPreciseHours();
         const endTime = new Date().toISOString();
 
+        // Optimistically stop the timer in the UI immediately so the user sees it end
+        const prevState = { startTime, notes, isFasting };
+        setIsFasting(false);
+        setStartTime(null);
+        setNotes([]);
+        // If the user is not authenticated, roll back and inform them
+        if (!isAuthenticated) {
+            // rollback
+            setIsFasting(!!prevState.startTime);
+            setStartTime(prevState.startTime);
+            setNotes(prevState.notes);
+            setIsSaving(false);
+            setSnackbarMessage('🔒 You must be logged in to save your fast.');
+            setSnackbarSeverity('info');
+            setSnackbarOpen(true);
+            return;
+        }
         try {
-            await axios.post(`${API_URL}/save-fast`, {
-                startTime,
+            await api.post('/save-fast', {
+                startTime: prevState.startTime,
                 endTime,
                 durationHours: finalHoursFasted,
                 fastType,
-                notes: notes.reverse(),
+                // send a reversed COPY of notes so we don't mutate state via Array.prototype.reverse()
+                notes: [...prevState.notes].reverse(),
             });
 
-            setIsFasting(false);
-            setStartTime(null);
-            setNotes([]);
-            
+            // on success, clear any active-fast stored on the server
+            try { await api.delete('/active-fast'); } catch (err) { console.error('Failed to clear active fast on server:', err); }
+
             setSnackbarMessage(`✅ Fast successfully stopped and logged to history! Duration: ${finalHoursFasted.toFixed(2)} hours.`);
             setSnackbarSeverity('success');
             setSnackbarOpen(true);
@@ -183,15 +246,28 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
 
         } catch (error) {
             console.error('Failed to save fast:', error);
-            
-            setSnackbarMessage('⚠️ Failed to save fast to history, but the current fast has ended.');
+
+            setSnackbarMessage('⚠️ Failed to save fast to history (server error). The timer was stopped locally.');
             setSnackbarSeverity('error');
             setSnackbarOpen(true);
-            
-            // Still reset state even if save fails (as requested in original code's error block)
-            setIsFasting(false);
-            setStartTime(null);
-            setNotes([]);
+
+            // If save failed due to network, queue the save locally for later sync
+            try {
+                const pendingKey = `pendingSaves:${storageId}`;
+                const existing = JSON.parse(localStorage.getItem(pendingKey) || '[]');
+                existing.push({ id: nanoid(8), payload: { startTime: prevState.startTime, endTime, durationHours: finalHoursFasted, fastType, notes: [...prevState.notes].reverse() }, createdAt: new Date().toISOString() });
+                localStorage.setItem(pendingKey, JSON.stringify(existing));
+                setSnackbarMessage('⚠️ Save queued locally and will sync when online or after login.');
+                setSnackbarSeverity('info');
+                setSnackbarOpen(true);
+            } catch (e) {
+                console.error('Failed to queue pending save:', e);
+            }
+
+            // Note: we intentionally do NOT automatically restore the prior timer state here to avoid surprising UX.
+            // If you prefer rollback on failure, we can restore prevState here instead.
+        } finally {
+            setIsSaving(false);
         }
     };
 
@@ -263,11 +339,11 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
         try {
             const currentHours = getPreciseHours();
 
-            await axios.post(`${API_URL}/send-report`, {
+            await api.post('/send-report', {
                 startTime,
                 currentHours: currentHours,
                 fastType,
-                notes: notes.reverse(),
+                notes: [...notes].reverse(),
                 recipientEmail,
             });
 
@@ -289,6 +365,38 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
 
 
     // --- Component JSX ---
+    // Sync pending saves when user logs in or when browser regains connectivity
+    useEffect(() => {
+        let mounted = true;
+
+        const syncPending = async () => {
+            if (!isAuthenticated) return;
+            const pendingKey = `pendingSaves:${storageId}`;
+            const existing = JSON.parse(localStorage.getItem(pendingKey) || '[]');
+            if (!existing || existing.length === 0) return;
+
+            for (const item of existing) {
+                try {
+                    await api.post('/save-fast', item.payload);
+                    // on success remove this item
+                    const remaining = JSON.parse(localStorage.getItem(pendingKey) || '[]').filter((p: any) => p.id !== item.id);
+                    localStorage.setItem(pendingKey, JSON.stringify(remaining));
+                } catch (err) {
+                    console.error('Sync failed for pending save:', err);
+                    // stop retrying this run
+                    break;
+                }
+            }
+        };
+
+        // Attempt sync on mount if authenticated
+        if (isAuthenticated && mounted) syncPending();
+
+        const onOnline = () => { if (isAuthenticated) syncPending(); };
+        window.addEventListener('online', onOnline);
+
+        return () => { mounted = false; window.removeEventListener('online', onOnline); };
+    }, [isAuthenticated, storageId]);
     return (
         <Box>
             {/* TOP SECTION: Current Status Card */}
@@ -313,6 +421,11 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                             <Typography variant="h6" color="text.secondary">
                                 <AccessTime sx={{ verticalAlign: 'middle', mr: 1 }} />
                                 Current Fast Duration
+                            </Typography>
+
+                            {/* Owner indicator */}
+                            <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>
+                                Active for: {user?.email ?? 'Guest'} {isAuthenticated ? '(you)' : '(not logged in)'}
                             </Typography>
 
                             <LiveFastDuration
@@ -375,8 +488,9 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                                     size="large"
                                     onClick={handleStopFast} 
                                     fullWidth
+                                    disabled={isSaving}
                                 >
-                                    STOP FAST ({hoursFasted.toFixed(2)}h)
+                                    {isSaving ? `STOPPING... (${hoursFasted.toFixed(2)}h)` : `STOP FAST (${hoursFasted.toFixed(2)}h)`}
                                 </Button>
                             ) : (
                                 <Button

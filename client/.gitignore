@@ -8,3 +8,5 @@
 # local environment variables and logs
 .env
 *.log
+
+node_modules/

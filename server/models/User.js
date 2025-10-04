@@ -1,5 +1,7 @@
+// server/models/User.js
+
 const mongoose = require('mongoose');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcrypt'); // Requires 'npm install bcrypt' or 'npm install bcryptjs'
 
 const UserSchema = new mongoose.Schema({
     email: {
@@ -13,12 +15,17 @@ const UserSchema = new mongoose.Schema({
     password: {
         type: String,
         required: [true, 'Password is required'],
-        minlength: [6, 'Password must be at least 6 characters long']
+        minlength: [6, 'Password must be at least 6 characters long'],
+        select: false, // <-- CRITICAL: Prevents password from being returned in standard queries
     },
-    // You can add other fields here, e.g., name, preferences, etc.
     createdAt: {
         type: Date,
         default: Date.now,
+    },
+    // Track last login time to support cleanup of stale active timers
+    lastLogin: {
+        type: Date,
+        default: null,
     },
 });
 
@@ -36,8 +43,9 @@ UserSchema.pre('save', async function (next) {
     }
 });
 
-// Instance method to compare passwords during login
+// Instance method to compare passwords during login (Fixes the function call)
 UserSchema.methods.comparePassword = async function (candidatePassword) {
+    // Uses the password retrieved by .select('+password') in the route
     return bcrypt.compare(candidatePassword, this.password);
 };
 
