@@ -69,6 +69,8 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
     const [snackbarOpen, setSnackbarOpen] = useState(false);
     const [snackbarMessage, setSnackbarMessage] = useState('');
     const [snackbarSeverity, setSnackbarSeverity] = useState<'success' | 'error' | 'info'>('info');
+    // Auto-hide duration for the non-success snackbar (ms)
+    const [snackbarDuration, setSnackbarDuration] = useState<number>(6000);
     
     // Confirmation Dialog States
     const [isStopConfirmOpen, setIsStopConfirmOpen] = useState(false);
@@ -304,6 +306,8 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
 
         setNotes(prevNotes => prevNotes.filter(note => note.id !== noteIdToDelete));
         
+        // Show a slightly longer confirmation so users notice it if they don't click the close 'x'
+        setSnackbarDuration(10000);
         setSnackbarMessage('🗑️ Note deleted.');
         setSnackbarSeverity('info');
         setSnackbarOpen(true);
@@ -412,6 +416,7 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                             width: { xs: '100%', md: '50%' },
                             minWidth: { md: 250 },
                             p: 3,
+                            position: 'relative' /* make this a positioning context for the success snackbar */,
                             textAlign: 'center',
                             display: 'flex',
                             flexDirection: 'column',
@@ -437,6 +442,21 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                                 <Typography variant="body1" color="text.secondary">
                                     Start: {format(parseISO(startTime), 'MMM d, h:mm a')}
                                 </Typography>
+                            )}
+
+                            {/* Inline success snackbar positioned over the timer */}
+                            {snackbarSeverity === 'success' && (
+                                <Snackbar
+                                    open={snackbarOpen}
+                                    autoHideDuration={9000}
+                                    onClose={() => setSnackbarOpen(false)}
+                                    anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+                                    sx={{ position: 'absolute', top: 16, left: 0, right: 0, mx: 'auto' }}
+                                >
+                                    <Alert onClose={() => setSnackbarOpen(false)} severity="success" sx={{ width: '100%' }}>
+                                        {snackbarMessage}
+                                    </Alert>
+                                </Snackbar>
                             )}
                         </Box>
 
@@ -564,17 +584,20 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                 background: darkTheme.palette.background.paper,
                 height: '100%',
                 display: 'flex',
-                flexDirection: 'column'
+                flexDirection: 'column',
+                // allow flex children to shrink so inner scrollbars can appear
+                minHeight: 0
             }}>
 
                 {/* Fast Notes Box */}
-                <Box sx={{ flexGrow: 1 }}>
+                {/* ensure flex children can shrink and allow internal scrolling */}
+                <Box sx={{ flexGrow: 1, minHeight: 0 }}>
                     <Typography variant="h6" gutterBottom color="primary">
                         <Notes sx={{ verticalAlign: 'middle', mr: 1 }} /> Fast Notes
                     </Typography>
 
                     {/* Notes Display Box */}
-                    <Box sx={{ maxHeight: 150, overflowY: 'auto', mb: 2, p: 1, border: '1px solid #333', borderRadius: 1 }}>
+                    <Box sx={{ position: 'relative', maxHeight: { xs: '180px', md: '380px' }, overflowY: 'auto', mb: 2, p: 1, border: '1px solid #333', borderRadius: 1 }}>
                         {notes.length === 0 && <Typography variant="body2" color="text.secondary">No notes yet. Add one below!</Typography>}
                         {notes.map((note) => (
                             <Box
@@ -712,20 +735,22 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
 
             {/* --- MUI SNACKBAR --- */}
             {/* Used for Custom Time alerts, Email success/failure, and Stop Fast success/failure */}
-            <Snackbar
-                open={snackbarOpen}
-                autoHideDuration={6000}
-                onClose={() => setSnackbarOpen(false)}
-                anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-            >
-                <Alert
+            {snackbarSeverity !== 'success' && (
+                <Snackbar
+                    open={snackbarOpen}
+                    autoHideDuration={snackbarDuration}
                     onClose={() => setSnackbarOpen(false)}
-                    severity={snackbarSeverity}
-                    sx={{ width: '100%' }}
+                    anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
                 >
-                    {snackbarMessage}
-                </Alert>
-            </Snackbar>
+                    <Alert
+                        onClose={() => setSnackbarOpen(false)}
+                        severity={snackbarSeverity}
+                        sx={{ width: '100%' }}
+                    >
+                        {snackbarMessage}
+                    </Alert>
+                </Snackbar>
+            )}
         </Box>
     );
 };

@@ -1,1 +1,13 @@
 Persisting the active fast server-side means a user's timer can be rehydrated on another device/browser after login. If you want cross-device live syncing (e.g., real-time second-by-second), you'd need WebSockets or polling.
+
+
+Important security note (action required)
+
+Removing .env from tracking prevents future pushes from including it, but any secrets that were previously committed and pushed remain in the remote history.
+You should rotate the exposed secrets immediately:
+MongoDB connection string (change the user's password and update the connection URI)
+JWT secret (generate a new, strong random secret)
+Email password
+If you want, I can guide you through:
+Rotating those credentials.
+Rewriting git history to remove the secrets from all commits (using BFG or git-filter-repo) — note that rewriting history requires force-push and coordination with anyone else using the repo.
