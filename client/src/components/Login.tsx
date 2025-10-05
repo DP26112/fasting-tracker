@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Box, Button, TextField, Typography, Alert, CircularProgress, Link, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions } from '@mui/material';
-import axios from 'axios';
 import api from '../utils/api';
-import { useAuthStore } from '../store/authStore'; 
+import { useAuthStore } from '../store/authStore'; 
 
 // NOTE: register/login endpoints are available under /api/auth on the server.
 // We use the centralized `api` instance for authenticated calls; registration is unauthenticated
@@ -11,6 +10,7 @@ import { useAuthStore } from '../store/authStore'; 
 // --- Login Form Component ---
 const LoginForm: React.FC<{ switchToRegister: () => void }> = ({ switchToRegister }) => {
     const { login, authError, isLoading, loginWithToken } = useAuthStore();
+    void loginWithToken;
 
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');

@@ -11,3 +11,90 @@ Email password
 If you want, I can guide you through:
 Rotating those credentials.
 Rewriting git history to remove the secrets from all commits (using BFG or git-filter-repo) — note that rewriting history requires force-push and coordination with anyone else using the repo.
+
+=========================
+auto status emails
+ 
+ minnor reformat of email??
+
+total trophy count (based on fast history)
+
+add feature: option to add a fast manually
+
+*** clean up all snack bars make them uniform (minor ui task)*****
+==================================
+
+How you can run / verify locally
+
+Run server tests (runs both tests):
+Open PowerShell in server folder and run:
+You should see both tests pass (model + endpoints).
+Use the dev script to list schedules:
+Basic:
+Filter by user:
+Filter by startTime:
+Limit:
+Enable debug logs temporarily
+Start server with debug logs:
+Or set in .env: DEBUG_LOGS=true
+
+
+
+
+
+
+
+
+
+=========================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Virtualize the list of history entries
+
+What: Use a virtualization library (react-window, react-virtual, or TanStack Virtual) to only render the visible slice of the history list.
+Benefit: Very large lists render and scroll smoothly; big wins for thousands of rows.
+Cost: Slightly more code complexity (item sizing/height management); awkward if expanded items have variable heights (requires VariableSizeList or dynamic measurement).
+Effort: ~45–90 minutes (depends on whether items are fixed-height).
+Acceptance check: smooth scrolling for large history; only items in view are mounted.
+Virtualize large note lists inside details
+
+What: If a single fast can have many notes, virtualize the notes list inside AccordionDetails.
+Benefit: Avoids mounting thousands of note DOM nodes.
+Cost: Same as above, plus nested virtualization complexity.
+Effort: ~30–60 minutes.
+Heavier / advanced (1–2 days)
+Switch to controlled expansion + fetch-on-expand or on-demand rendering
+
+What: Keep only lightweight summaries in DOM, and when the user expands, fetch/render the details (or render offloaded content in a portal or modal).
+Benefit: Minimal initial DOM, best UX when details are heavy or include charts/media.
+Cost: UX change (slightly different flow), more network logic if fetching.
+Effort: 2–8+ hours depending on fetching and caching.
+Offload heavy rendering (web worker / offscreen canvas)
+
+What: If details include heavy CPU work (charts, formatting), offload to web worker or pre-render elsewhere.
+Benefit: smoother UI thread.
+Cost: Most complex; rarely necessary for plain lists.
+Effort: days.

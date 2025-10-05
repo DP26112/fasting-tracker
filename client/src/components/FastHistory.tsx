@@ -2,25 +2,20 @@
 
 import React, { useState, useEffect } from 'react';
 import {
-    Typography, Box, Card, CircularProgress, Alert,
-    Accordion, AccordionSummary, AccordionDetails, List, ListItem,
-    ListItemText, Grid, Divider, Button, TextField, Snackbar,
+    Typography, Box, CircularProgress, Alert,
+    List, Button, TextField, Snackbar,
     Collapse,
     Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import { AccessTime, Event, Notes, WaterDrop, WbSunny, Send } from '@mui/icons-material';
-import DeleteIcon from '@mui/icons-material/Delete';
-import { format, parseISO } from 'date-fns';
-import axios from 'axios';
-import type { FastRecord, Note } from '../types';
+import { Event, Send } from '@mui/icons-material';
+import FastHistoryItem from './FastHistoryItem';
+import api from '../utils/api';
+import type { FastRecord } from '../types';
 
 // 🔑 ZUSTAND CHANGE: Import the custom authentication store
 import { useAuthStore } from '../store/authStore'; 
-
-
-const API_URL = 'http://localhost:3001/api';
 
 // 🔑 ZUSTAND CHANGE: Remove the prop interface as we are using the store directly
 // interface FastHistoryProps {
@@ -66,10 +61,7 @@ const FastHistory: React.FC = () => {
 
             try {
                 // 🔑 AUTH CHANGE: Pass the Authorization header to the request
-                const response = await axios.get<FastRecord[]>(
-                    `${API_URL}/fast-history`,
-                    getAuthHeaders() 
-                );
+                const response = await api.get<FastRecord[]>('/fast-history', getAuthHeaders());
                 setHistory(response.data);
                 setError(null); // Clear any previous auth error
             } catch (err: any) {
@@ -103,7 +95,7 @@ const FastHistory: React.FC = () => {
 
         setSendingEmail(true);
         try {
-            const response = await axios.post(`${API_URL}/email-history`, { recipientEmail: email });
+            const response = await api.post('/email-history', { recipientEmail: email });
 
             setSnackbarMessage(response.data.message || '✅ Fast history email request sent successfully!');
             setSnackbarOpen(true);
@@ -118,11 +110,11 @@ const FastHistory: React.FC = () => {
     };
     
     // 1. Function to OPEN the Confirmation Dialog
-    const handleOpenDeleteConfirm = (event: React.MouseEvent, fastId: string) => {
+    const handleOpenDeleteConfirm = React.useCallback((event: React.MouseEvent, fastId: string) => {
         event.stopPropagation();
         setFastToDeleteId(fastId);
         setIsConfirmDialogOpen(true);
-    };
+    }, []);
     
     // 2. Function to EXECUTE the Delete after Confirmation (PROTECTED)
     const handleConfirmDelete = async () => {
@@ -133,10 +125,7 @@ const FastHistory: React.FC = () => {
         try {
             setLoading(true);
             // 🔑 AUTH CHANGE: Pass the Authorization header to the request
-            await axios.delete(
-                `${API_URL}/fast-history/${fastToDeleteId}`,
-                getAuthHeaders()
-            );
+            await api.delete(`/fast-history/${fastToDeleteId}`, getAuthHeaders());
 
             setHistory(prevHistory => prevHistory.filter(fast => fast._id !== fastToDeleteId));
 
@@ -208,93 +197,7 @@ const FastHistory: React.FC = () => {
                     ) : (
                         <List>
                             {history.map((fast) => (
-                                <Card key={fast._id} raised sx={{ mb: 2, background: 'background.paper' }}>
-                                    <Accordion disableGutters sx={{ background: 'transparent' }}>
-                                        <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ '& .MuiAccordionSummary-content': { margin: '12px 0' } }}>
-                                            <Grid container spacing={2} alignItems="center">
-                                                <Grid item xs={12} sm={4}>
-                                                    <Typography variant="h6" color="secondary.main">
-                                                        {fast.durationHours.toFixed(2)} Hrs
-                                                    </Typography>
-                                                </Grid>
-                                                <Grid item xs={12} sm={5}>
-                                                    <Typography variant="body1" color="text.secondary">
-                                                        {format(parseISO(fast.endTime), 'MMM d, yyyy')}
-                                                    </Typography>
-                                                </Grid>
-
-                                                <Grid item xs={12} sm={3} sx={{ textAlign: 'right' }}>
-                                                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 1 }}>
-                                                        <Typography variant="body2" sx={{ color: fast.fastType === 'dry' ? 'error.main' : 'info.main', whiteSpace: 'nowrap' }}>
-                                                            {fast.fastType.toUpperCase()}
-                                                            {fast.fastType === 'wet' ? <WaterDrop sx={{ fontSize: 16, ml: 0.5 }} /> : <WbSunny sx={{ fontSize: 16, ml: 0.5 }} />}
-                                                        </Typography>
-
-                                                        {/* UPDATED: Calls the dialog open function */}
-                                                        <Button
-                                                            onClick={(event) => handleOpenDeleteConfirm(event, fast._id)}
-                                                            variant="outlined"
-                                                            color="error"
-                                                            size="small"
-                                                            sx={{ minWidth: '32px', padding: '4px', border: 'none' }}
-                                                        >
-                                                            <DeleteIcon sx={{ fontSize: 16 }} />
-                                                        </Button>
-                                                    </Box>
-                                                </Grid>
-                                            </Grid>
-                                        </AccordionSummary>
-
-                                        <AccordionDetails sx={{ pt: 0, borderTop: '1px solid #333' }}>
-                                            <Box sx={{ p: 2 }}>
-                                                <Typography variant="body2" color="text.secondary">
-                                                    <Event sx={{ fontSize: 16, verticalAlign: 'middle', mr: 0.5 }} /> Started: {format(parseISO(fast.startTime), 'MMM d, yyyy h:mm a')}
-                                                </Typography>
-                                                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                                                    <AccessTime sx={{ fontSize: 16, verticalAlign: 'middle', mr: 0.5 }} /> Ended: {format(parseISO(fast.endTime), 'MMM d, yyyy h:mm a')}
-                                                </Typography>
-
-                                                {fast.notes && fast.notes.length > 0 && (
-                                                    <>
-                                                        <Divider sx={{ my: 1 }} />
-                                                        <Typography variant="subtitle2" color="primary" sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                                                            <Notes sx={{ fontSize: 18, mr: 0.5 }} /> Logged Notes:
-                                                        </Typography>
-                                                        <Box sx={{
-                                                            position: 'relative',
-                                                            // use explicit px values so MUI doesn't mismatch unit types
-                                                            maxHeight: { xs: '180px', md: '380px' },
-                                                            overflowY: 'auto',
-                                                            width: '100%',
-                                                            // STRONG TEMP HIGHLIGHT: very visible so it's easy to spot
-                                                            border: '3px solid rgba(255,64,129,0.95)',
-                                                            backgroundColor: 'rgba(255,64,129,0.06)',
-                                                            borderRadius: 1,
-                                                            boxShadow: '0 8px 24px rgba(255,64,129,0.06)',
-                                                            p: 1,
-                                                            // allow this box to shrink within accordions and show internal scroll
-                                                            minHeight: 0
-                                                        }}>
-                                                            <Box sx={{ position: 'absolute', top: 8, left: 12, bgcolor: 'rgba(255,235,59,0.98)', color: '#000', px: 1, py: 0.35, borderRadius: 0.5, zIndex: 20, fontWeight: 'bold', fontSize: '0.75rem' }}>
-                                                                TEMP HIGHLIGHT
-                                                            </Box>
-                                                            <List dense disablePadding>
-                                                                {fast.notes.map((note, index) => (
-                                                                    <ListItem key={index} disableGutters sx={{ py: 0 }}>
-                                                                        <ListItemText
-                                                                            primary={`${format(parseISO(note.time), 'h:mm a')}: ${note.text}`}
-                                                                            primaryTypographyProps={{ variant: 'caption', color: 'text.primary' }}
-                                                                        />
-                                                                    </ListItem>
-                                                                ))}
-                                                            </List>
-                                                        </Box>
-                                                    </>
-                                                )}
-                                            </Box>
-                                        </AccordionDetails>
-                                    </Accordion>
-                                </Card>
+                                <FastHistoryItem key={fast._id} fast={fast} onDelete={handleOpenDeleteConfirm} />
                             ))}
                         </List>
                     )}
@@ -305,14 +208,16 @@ const FastHistory: React.FC = () => {
                 <Typography variant="h6" gutterBottom color="secondary.main">
                     Email Full History
                 </Typography>
-                <Grid container spacing={2} alignItems="center">
-                    <Grid item xs={12} sm={8}>
+                <Box sx={{ display: 'flex', gap: 2, flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'center' }}>
+                    <Box sx={{ flex: '1 1 60%' }}>
                         <TextField
                             fullWidth
                             label="Email Address"
+                            name="emailHistoryRecipient"
                             type="email"
                             variant="outlined"
                             size="small"
+                            inputProps={{ autoComplete: 'new-password' }}
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             sx={{
@@ -325,8 +230,8 @@ const FastHistory: React.FC = () => {
                                 '& .MuiInputBase-input': { color: 'white' }
                             }}
                         />
-                    </Grid>
-                    <Grid item xs={12} sm={4}>
+                    </Box>
+                    <Box sx={{ flex: '0 0 160px' }}>
                         <Button
                             fullWidth
                             variant="contained"
@@ -337,8 +242,8 @@ const FastHistory: React.FC = () => {
                         >
                             {sendingEmail ? 'Sending...' : 'Email All Fasts'}
                         </Button>
-                    </Grid>
-                </Grid>
+                    </Box>
+                </Box>
                 {(history.length === 0 || !email) && !sendingEmail && (
                     <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
                         * {history.length === 0 ? 'Log a completed fast' : 'Enter an email address'} to enable the email feature.

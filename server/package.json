@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test:model": "node test/test_scheduled_report_model.js",
+    "test:endpoints": "node test/test_schedule_endpoints.js",
+    "test": "npm run test:model && npm run test:endpoints",
+    "why": "node -r why-is-node-running server.js"
   },
   "keywords": [],
   "author": "",
@@ -20,5 +23,9 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.18.2",
     "nodemailer": "^7.0.6"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^8.11.0",
+    "why-is-node-running": "^3.2.2"
   }
 }

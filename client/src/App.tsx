@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { 
     Container, Typography, Box, 
-    CssBaseline, createTheme, ThemeProvider, Grid,
+    CssBaseline, createTheme, ThemeProvider,
     Button 
 } from '@mui/material';
 
@@ -49,6 +49,10 @@ const darkTheme = createTheme({
                     flexDirection: 'column', 
                     alignItems: 'center', 
                     justifyContent: 'flex-start',
+                    // Reserve vertical scrollbar space to avoid layout shifts when content height changes
+                    overflowY: 'scroll',
+                    // where supported reserve the scrollbar gutter to avoid jitter
+                    scrollbarGutter: 'stable',
                 },
                 html: {
                     minHeight: '100vh',

@@ -1,6 +1,15 @@
 // server.js - Authenticated State
 
-require('dotenv').config(); 
+const path = require('path');
+const dotenv = require('dotenv');
+// Load .env from the server directory explicitly so the file is found even if node is run from workspace root
+const dotenvPath = path.join(__dirname, '.env');
+const dotenvResult = dotenv.config({ path: dotenvPath });
+if (dotenvResult.error) {
+    console.warn(`No .env loaded from ${dotenvPath}; falling back to environment variables.`);
+} else {
+    console.log(`Loaded environment variables from ${dotenvPath}`);
+}
 
 const express = require('express');
 const cors = require('cors');
@@ -16,9 +25,13 @@ const authRoutes = require('./routes/authRoutes');
 // Require the Fast model (assuming it's in ./models/Fast)
 const Fast = require('./models/Fast');
 const ActiveFast = require('./models/ActiveFast');
+const ScheduledReport = require('./models/ScheduledReport');
 
 const app = express();
 const PORT = 3001;
+
+// Debug flag to gate verbose dev logs (set DEBUG_LOGS=true to enable)
+const DEBUG_LOGS = process.env.DEBUG_LOGS === 'true';
 
 // --- AUTH CONFIG ---
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -85,6 +98,14 @@ app.use(cors({
 }));
 app.use(bodyParser.json());
 
+// Simple request logger to help debug route issues
+app.use((req, res, next) => {
+    try {
+        if (DEBUG_LOGS) console.log(`>>> Incoming request: ${req.method} ${req.originalUrl}`);
+    } catch (e) { /* ignore logging errors */ }
+    next();
+});
+
 // --- Health endpoints ---
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', uptime: process.uptime(), name: 'fasting-tracker' });
@@ -117,8 +138,12 @@ app.get('/api/ready', (req, res) => {
 const requireAuth = (req, res, next) => {
     const authHeader = req.headers.authorization;
 
+    // Debug: log whether an Authorization header was provided and whether JWT_SECRET is configured
+    try { if (DEBUG_LOGS) console.log(`requireAuth: header present=${!!authHeader}, jwtSecretSet=${!!JWT_SECRET}, path=${req.method} ${req.originalUrl}`); } catch (e) { /* ignore */ }
+
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         // If no token is provided, access is denied
+        console.warn('requireAuth: missing or malformed Authorization header for', req.method, req.originalUrl);
         return res.status(401).json({ message: 'Access denied. No token provided.' });
     }
 
@@ -127,9 +152,10 @@ const requireAuth = (req, res, next) => {
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
         // Attach the user ID to the request object
-        req.user = { id: decoded.id }; 
+        req.user = { id: decoded.id };
         next();
     } catch (err) {
+        console.warn('requireAuth: invalid token for', req.method, req.originalUrl, err.message);
         return res.status(401).json({ message: 'Invalid token.' });
     }
 };
@@ -184,13 +210,20 @@ app.get('/api/fast-history', requireAuth, async (req, res) => { // 🔑 ADDED: r
 
 // 3. Email Current Status Endpoint (ANONYMOUS - UNCHANGED)
 app.post('/api/send-report', async (req, res) => {
-    const { startTime, currentHours, fastType, notes, recipientEmail } = req.body;
+    const { startTime, currentHours, fastType, notes, recipientEmail, recipients } = req.body;
 
-    if (!recipientEmail || !startTime) {
-        return res.status(400).send({ message: 'Missing required data (recipient or start time).' });
-    }
+    // Accept either a single recipientEmail or an array of recipients; require at least one recipient and startTime
+    const hasRecipients = Array.isArray(recipients) ? recipients.length > 0 : !!recipientEmail;
+    if (!hasRecipients || !startTime) {
+        return res.status(400).send({ message: 'Missing required data (recipient(s) or start time).' });
+    }
 
-    console.log(`Attempting to send report to: ${recipientEmail}`);
+    console.log('send-report payload recipients array:', recipients);
+    console.log('send-report payload recipientEmail:', recipientEmail);
+    // Determine primary recipient (explicit recipientEmail preferred). Put all other recipients into BCC.
+    const primaryRecipient = recipientEmail || (Array.isArray(recipients) && recipients.length > 0 ? recipients[0] : null);
+    const bccList = Array.isArray(recipients) ? (recipients.filter(r => r && r !== primaryRecipient)) : [];
+    console.log(`Attempting to send report. To: ${primaryRecipient}; BCC: ${bccList.join(', ')}`);
 
     // ensure notes are sorted newest-first
     const originalNotes = (notes || []);
@@ -201,7 +234,7 @@ app.post('/api/send-report', async (req, res) => {
         console.warn('send-report: note times appear invalid; falling back to reversing original array to put newest-first');
         notesSorted = originalNotes.slice().reverse();
     }
-    console.log('send-report: sorted note times:', notesSorted.map(n => n.time));
+    // notesSorted prepared for rendering
     const notesHtml = notesSorted.map(note => {
         const timeStr = formatNoteTimestamp(note.time);
         const atHourRaw = note.fastHours ?? note.fastHour ?? note.duration ?? null;
@@ -239,12 +272,14 @@ app.post('/api/send-report', async (req, res) => {
     }
     if (!trophyHtml) trophyHtml = '<span style="color:#666;">No trophies yet</span>';
 
-    console.log('send-report: trophyHtml ->', trophyHtml);
+    // trophyHtml prepared for rendering
 
     const mailOptions = {
-        from: `Fasting Tracker Report <${EMAIL_USER}>`,
-        to: recipientEmail,
-        subject: `Fasting Status Report - ${currentHours.toFixed(2)} Hours`,
+        from: `Fasting Tracker Report <${EMAIL_USER}>`,
+        // We'll send the primary message to the primary recipient and then send
+        // separate messages to each additional recipient to avoid provider BCC issues.
+        to: primaryRecipient,
+        subject: `Fasting Status Report - ${currentHours.toFixed(2)} Hours`,
         html: `
             <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
                 <!-- Trophy summary (exalted above the report) -->
@@ -264,20 +299,31 @@ app.post('/api/send-report', async (req, res) => {
         `
     };
 
-    // Debug: print HTML for verification (helps when mail delivery may fail)
-    console.log('=== Generated Email HTML (send-report) ===');
-    console.log(mailOptions.html);
-    console.log('=== End Generated Email HTML ===');
+    // Email HTML prepared (preview available via scripts/generate_email_preview.js)
 
     try {
+        console.log('Sending primary message. To:', primaryRecipient, 'Extras:', bccList.join(', '));
         await transporter.sendMail(mailOptions);
-        console.log('Email sent successfully!');
-        res.status(200).send({ message: 'Email sent successfully!' });
+        // Now send separate copies to additional recipients (if any)
+        if (Array.isArray(bccList) && bccList.length > 0) {
+            for (const addr of bccList) {
+                try {
+                    const copyOptions = { ...mailOptions, to: addr };
+                    // remove any bcc in case it was present
+                    delete copyOptions.bcc;
+                    await transporter.sendMail(copyOptions);
+                    console.log('Sent copy to additional recipient:', addr);
+                } catch (copyErr) {
+                    console.error('Failed to send copy to additional recipient', addr, copyErr && copyErr.message ? copyErr.message : copyErr);
+                }
+            }
+        }
+        res.status(200).send({ message: 'Email sent successfully!', to: primaryRecipient, bcc: bccList });
     } catch (error) {
-        console.error('Error sending email:', error.message);
+        console.error('Error sending email:', error && error.message ? error.message : error);
         res.status(500).send({ 
             message: 'Failed to send email. Check Nodemailer configuration.', 
-            error: error.message 
+            error: error && error.message ? error.message : String(error) 
         });
     }
 });
@@ -543,3 +589,408 @@ app.delete('/api/active-fast', requireAuth, async (req, res) => {
         res.status(500).json({ message: 'Failed to clear active fast.' });
     }
 });
+
+
+// --- Scheduled Reports Endpoints (PROTECTED) ---
+// Create or update a scheduled report for an active fast
+app.post('/api/schedule-status-report', requireAuth, async (req, res) => {
+    try {
+        // Debug: log incoming body and authenticated user id to help diagnose 404/401/500 issues
+    try { if (DEBUG_LOGS) console.log('schedule-status-report POST body:', JSON.stringify(req.body)); } catch (e) { if (DEBUG_LOGS) console.log('schedule-status-report POST body: <unserializable>'); }
+    try { if (DEBUG_LOGS) console.log('schedule-status-report user:', req.user && req.user.id); } catch (e) { /* ignore */ }
+        if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ message: 'Database not connected; scheduling unavailable.' });
+        }
+        const userId = req.user.id;
+        const { activeFastId, startTime, recipients } = req.body;
+        if (!startTime && !activeFastId) return res.status(400).json({ message: 'Missing required fields (startTime or activeFastId).' });
+        if (!recipients) return res.status(400).json({ message: 'Missing recipients.' });
+
+        const recList = String(recipients).split(',').map(s => s.trim()).filter(Boolean).slice(0, 10);
+
+        // Resolve activeFastId: if provided and valid ObjectId, use it; otherwise try to find ActiveFast by userId+startTime
+        let resolvedActiveFastId = null;
+        if (activeFastId && mongoose.Types.ObjectId.isValid(activeFastId)) {
+            resolvedActiveFastId = activeFastId;
+        }
+    const start = startTime ? new Date(startTime) : null;
+        if (!resolvedActiveFastId && start) {
+            // try to find an active fast for this user with matching startTime
+            // Use a tolerant range (±1 minute) because exact ISO equality is brittle across clients
+            const rangeStart = new Date(start.getTime() - 60 * 1000);
+            const rangeEnd = new Date(start.getTime() + 60 * 1000);
+            const active = await ActiveFast.findOne({ userId, startTime: { $gte: rangeStart, $lte: rangeEnd } });
+            if (active) resolvedActiveFastId = active._id;
+        }
+        // If still not resolved, attempt to find the user's active fast (fallback)
+        if (!resolvedActiveFastId) {
+            const active = await ActiveFast.findOne({ userId });
+            if (active) {
+                resolvedActiveFastId = active._id;
+            }
+        }
+    // If no activeFastId could be resolved, we will allow scheduling keyed by userId + startTime
+    // (this supports cases where the ActiveFast doc isn't present or exact matching failed)
+    const now = new Date();
+
+        // compute nextSendAt anchored to start: first at start+24h, then every 6h after
+        const firstAnchor = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+        let nextSendAt;
+        if (now < firstAnchor) {
+            nextSendAt = firstAnchor;
+        } else {
+            const diffMs = now.getTime() - firstAnchor.getTime();
+            const intervalsPassed = Math.floor(diffMs / (6 * 60 * 60 * 1000));
+            nextSendAt = new Date(firstAnchor.getTime() + (intervalsPassed + 1) * 6 * 60 * 60 * 1000);
+        }
+
+        // Upsert by userId + activeFastId
+        try {
+            const query = resolvedActiveFastId ? { userId, activeFastId: resolvedActiveFastId } : { userId, startTime: start };
+            const setObj = { recipients: recList, startTime: start, nextSendAt, enabled: true, processing: false };
+            if (resolvedActiveFastId) setObj.activeFastId = resolvedActiveFastId; else setObj.activeFastId = null;
+            const upd = await ScheduledReport.findOneAndUpdate(
+                query,
+                { $set: setObj },
+                { upsert: true, new: true, runValidators: true }
+            );
+            return res.status(200).json({ message: 'Scheduled report created/updated.', schedule: upd });
+        } catch (validationErr) {
+            console.error('schedule-status-report validation error:', validationErr.message);
+            return res.status(400).json({ message: 'Invalid schedule data.', error: validationErr.message });
+        }
+    } catch (err) {
+        console.error('schedule-status-report error:', err.message);
+        return res.status(500).json({ message: 'Server error creating schedule.', error: err.message });
+    }
+});
+
+// GET schedule by activeFastId
+app.get('/api/schedule-status-report', requireAuth, async (req, res) => {
+    try {
+        if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ message: 'Database not connected; scheduling unavailable.' });
+        }
+        const userId = req.user.id;
+        const { activeFastId, startTime } = req.query;
+        if (!activeFastId && !startTime) return res.status(400).json({ message: 'activeFastId or startTime is required.' });
+
+        let resolvedActiveFastId = null;
+        if (activeFastId && mongoose.Types.ObjectId.isValid(String(activeFastId))) resolvedActiveFastId = activeFastId;
+        if (!resolvedActiveFastId && startTime) {
+            const start = new Date(String(startTime));
+            const rangeStart = new Date(start.getTime() - 60 * 1000);
+            const rangeEnd = new Date(start.getTime() + 60 * 1000);
+            const active = await ActiveFast.findOne({ userId, startTime: { $gte: rangeStart, $lte: rangeEnd } });
+            if (active) resolvedActiveFastId = active._id;
+        }
+        if (!resolvedActiveFastId) {
+            const active = await ActiveFast.findOne({ userId });
+            if (active) resolvedActiveFastId = active._id;
+        }
+    // First try to find by activeFastId if we resolved one
+        let sched = null;
+        if (resolvedActiveFastId) {
+            sched = await ScheduledReport.findOne({ userId, activeFastId: resolvedActiveFastId });
+        }
+        // If not found and startTime was provided, try to find schedule by (userId + startTime) using same ±1 minute tolerance
+        if (!sched && startTime) {
+            const start = new Date(String(startTime));
+            const rangeStart = new Date(start.getTime() - 60 * 1000);
+            const rangeEnd = new Date(start.getTime() + 60 * 1000);
+            sched = await ScheduledReport.findOne({ userId, startTime: { $gte: rangeStart, $lte: rangeEnd } });
+        }
+
+        return res.status(200).json({ schedule: sched || null });
+    } catch (err) {
+        console.error('GET schedule-status-report error:', err.message);
+        return res.status(500).json({ message: 'Server error fetching schedule.', error: err.message });
+    }
+});
+
+// DELETE schedule for activeFastId
+app.delete('/api/schedule-status-report', requireAuth, async (req, res) => {
+    try {
+        if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ message: 'Database not connected; scheduling unavailable.' });
+        }
+        const userId = req.user.id;
+        const { activeFastId, startTime } = req.body || req.query;
+        if (!activeFastId && !startTime) return res.status(400).json({ message: 'activeFastId or startTime is required.' });
+
+        let resolvedActiveFastId = null;
+        if (activeFastId && mongoose.Types.ObjectId.isValid(String(activeFastId))) resolvedActiveFastId = activeFastId;
+        if (!resolvedActiveFastId && startTime) {
+            const start = new Date(String(startTime));
+            const rangeStart = new Date(start.getTime() - 60 * 1000);
+            const rangeEnd = new Date(start.getTime() + 60 * 1000);
+            const active = await ActiveFast.findOne({ userId, startTime: { $gte: rangeStart, $lte: rangeEnd } });
+            if (active) resolvedActiveFastId = active._id;
+        }
+        if (!resolvedActiveFastId) {
+            const active = await ActiveFast.findOne({ userId });
+            if (active) resolvedActiveFastId = active._id;
+        }
+
+        // If we resolved an activeFastId, delete by that; otherwise if startTime was provided delete by userId+startTime
+        if (resolvedActiveFastId) {
+            await ScheduledReport.deleteOne({ userId, activeFastId: resolvedActiveFastId });
+            return res.status(200).json({ message: 'Schedule removed.' });
+        }
+
+        if (startTime) {
+            const start = new Date(String(startTime));
+            const rangeStart = new Date(start.getTime() - 60 * 1000);
+            const rangeEnd = new Date(start.getTime() + 60 * 1000);
+            await ScheduledReport.deleteOne({ userId, startTime: { $gte: rangeStart, $lte: rangeEnd } });
+            return res.status(200).json({ message: 'Schedule removed by startTime.' });
+        }
+
+        return res.status(404).json({ message: 'Active fast not found for user.' });
+    } catch (err) {
+        console.error('DELETE schedule-status-report error:', err.message);
+        return res.status(500).json({ message: 'Server error deleting schedule.', error: err.message });
+    }
+});
+
+
+// --- Simple DB-polling Scheduler (Phase A - safe defaults) ---
+const SCHEDULER_POLL_INTERVAL_MS = Number(process.env.SCHEDULER_POLL_INTERVAL_MS) || 5 * 60 * 1000; // default 5 minutes
+const SCHEDULER_BATCH_LIMIT = Number(process.env.SCHEDULER_BATCH_LIMIT) || 50;
+
+// Scheduler interval handle so we can clear it on shutdown or when DB disconnects
+let schedulerInterval = null;
+
+function startScheduler() {
+    if (schedulerInterval) return;
+    schedulerInterval = setInterval(processDueSchedules, SCHEDULER_POLL_INTERVAL_MS);
+    console.log('Scheduler started with interval ms=', SCHEDULER_POLL_INTERVAL_MS);
+}
+
+function stopScheduler() {
+    if (!schedulerInterval) return;
+    clearInterval(schedulerInterval);
+    schedulerInterval = null;
+    console.log('Scheduler stopped');
+}
+
+async function processDueSchedules() {
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) return;
+    try {
+        const now = new Date();
+        // Find up to batch limit schedules that are due and not processing
+        const due = await ScheduledReport.find({ enabled: true, processing: false, nextSendAt: { $lte: now } }).limit(SCHEDULER_BATCH_LIMIT);
+        if (!due || due.length === 0) return;
+
+        for (const sched of due) {
+            // Try to atomically claim it
+            const claimed = await ScheduledReport.findOneAndUpdate(
+                { _id: sched._id, processing: false },
+                { $set: { processing: true } },
+                { new: true }
+            );
+            if (!claimed) continue; // someone else claimed
+
+            (async () => {
+                try {
+                    // Verify the fast is still active
+                    const active = await ActiveFast.findOne({ _id: claimed.activeFastId, userId: claimed.userId });
+                    if (!active) {
+                        // disable schedule
+                        await ScheduledReport.findByIdAndUpdate(claimed._id, { $set: { enabled: false, processing: false } });
+                        return;
+                    }
+
+                    // Build the same payload used by /api/send-report
+                    const payload = {
+                        startTime: claimed.startTime.toISOString(),
+                        currentHours: (new Date().getTime() - new Date(claimed.startTime).getTime()) / (1000 * 60 * 60),
+                        fastType: active.fastType,
+                        notes: (active.notes || []).map(n => ({ time: n.time, text: n.text, fastHours: null })),
+                        // keep recipients array on the scheduled record; normalize to an array here
+                        recipients: Array.isArray(claimed.recipients) ? claimed.recipients : String(claimed.recipients || '').split(',').map(s => s.trim()).filter(Boolean)
+                    };
+
+                    // Determine primary recipient + BCC list (mirror /api/send-report behavior)
+                    const recArr = payload.recipients || [];
+                    const primaryRecipient = recArr.length > 0 ? recArr[0] : null;
+                    const bccList = recArr.length > 1 ? recArr.slice(1) : [];
+                    if (!primaryRecipient) {
+                        console.warn('Scheduled send skipped: no recipients for schedule', claimed._id);
+                        // disable the schedule to avoid repeated useless work
+                        await ScheduledReport.findByIdAndUpdate(claimed._id, { $set: { enabled: false, processing: false } });
+                        return;
+                    }
+
+                    // Call internal send logic by invoking transporter directly (reuse same mail building logic)
+                    // For simplicity, we'll reuse the /api/send-report by calling the mailer code inline
+                    // Construct notesHtml similar to send-report
+                    const originalNotes = payload.notes || [];
+                    let notesSorted = originalNotes.slice().sort((a, b) => new Date(b.time) - new Date(a.time));
+                    const allInvalidTimes = notesSorted.length > 0 && notesSorted.every(n => isNaN(new Date(n.time).getTime()));
+                    if (allInvalidTimes) notesSorted = originalNotes.slice().reverse();
+
+                    const notesHtml = notesSorted.map(note => {
+                        const timeStr = formatNoteTimestamp(note.time);
+                        const atHourRaw = note.fastHours ?? note.fastHour ?? note.duration ?? null;
+                        const atHour = formatHourValue(atHourRaw);
+                        const prefix = atHour != null ? `${timeStr} @ ${atHour}h` : `${timeStr}`;
+                        return `<li style="margin-bottom: 8px; color: #000;"><strong>${prefix}</strong> — ${note.text}</li>`;
+                    }).join('');
+
+                    const hrs = Number(payload.currentHours) || 0;
+                    const goldCount = Math.floor(hrs / 24);
+                    const remainder = hrs - goldCount * 24;
+                    const showPartial = goldCount >= 1 && remainder >= 6;
+                    const partialIsSilver = remainder >= 12;
+                    let trophyHtml = '';
+                    const svgFor = (color, size = 18) => `\n        <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle; margin-right:6px;">\n            <path d="M12 2l2.09 4.24L18.6 7l-3.3 2.9L16 14l-4-2-4 2 0.7-4.1L4.4 7l4.51-0.76L12 2z" fill="${color}" />\n        </svg>`;
+
+                    for (let i = 0; i < goldCount; i++) {
+                        trophyHtml += `<span style="display:inline-flex; align-items:center; vertical-align:middle; margin-right:6px;">\n            <span style=\"font-size:18px; line-height:1; margin-right:6px;\">🏆</span>${svgFor('#FFD700', 18)}</span>`;
+                    }
+                    if (showPartial) {
+                        if (partialIsSilver) {
+                            trophyHtml += `<span style="display:inline-flex; align-items:center; vertical-align:middle; margin-right:6px;">\n                <span style=\"font-size:16px; line-height:1; margin-right:6px;\">🥈</span>${svgFor('#C0C0C0', 16)}</span>`;
+                        } else {
+                            trophyHtml += `<span style="display:inline-flex; align-items:center; vertical-align:middle; margin-right:6px;">\n                <span style=\"font-size:16px; line-height:1; margin-right:6px;\">🥉</span>${svgFor('#CD7F32', 16)}</span>`;
+                        }
+                    }
+                    if (!trophyHtml) trophyHtml = '<span style="color:#666;">No trophies yet</span>';
+
+                    const mailOptions = {
+                        from: `Fasting Tracker Report <${EMAIL_USER}>`,
+                        to: primaryRecipient,
+                        bcc: bccList.length > 0 ? bccList.join(', ') : undefined,
+                        subject: `Fasting Status Report - ${payload.currentHours.toFixed(2)} Hours`,
+                        html: `
+            <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <div style="margin-bottom:12px;">${trophyHtml}</div>
+                <h2 style="color: #000;">Fasting Report Summary</h2>
+                <p><strong>Fast Start Time:</strong> ${new Date(payload.startTime).toLocaleString()}</p>
+                <p><strong>Current Hours Fasted:</strong> ${payload.currentHours.toFixed(2)} hours</p>
+                <p><strong>Fast Type:</strong> <span style="font-weight: bold; text-transform: uppercase; color: ${active.fastType === 'dry' ? '#D32F2F' : '#2196F3'};">${active.fastType} Fast</span></p>
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+                <h3 style="color: #000;">Fasting Notes:</h3>
+                ${notesSorted.length > 0 ? `<ul style="padding-left: 20px; list-style-type: none; color: #000;">${notesHtml}</ul>` : '<p>No notes logged during this fast.</p>'}
+            </div>
+                        `
+                    };
+
+                    console.log('Scheduled send. To:', primaryRecipient, 'Extras:', bccList.join(', '));
+                    try {
+                        await transporter.sendMail(mailOptions);
+                        // send individual copies to extras to avoid BCC delivery issues
+                        if (Array.isArray(bccList) && bccList.length > 0) {
+                            for (const addr of bccList) {
+                                try {
+                                    const copyOptions = { ...mailOptions, to: addr };
+                                    delete copyOptions.bcc;
+                                    await transporter.sendMail(copyOptions);
+                                    console.log('Scheduled copy sent to additional recipient:', addr);
+                                } catch (copyErr) {
+                                    console.error('Failed scheduled copy to', addr, copyErr && copyErr.message ? copyErr.message : copyErr);
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        console.error('Scheduled send failed for schedule', claimed._id, err && err.message ? err.message : err);
+                        // clear processing flag so it can be retried next run
+                        await ScheduledReport.findByIdAndUpdate(claimed._id, { $set: { processing: false } });
+                        return;
+                    }
+
+                    // advance nextSendAt by intervalHours (default 6), but align to anchor sequence based on startTime
+                    const newNext = new Date(claimed.nextSendAt.getTime() + (claimed.intervalHours || 6) * 60 * 60 * 1000);
+                    await ScheduledReport.findByIdAndUpdate(claimed._id, { $set: { nextSendAt: newNext, processing: false } });
+
+                } catch (err) {
+                    console.error('Error processing scheduled report:', err.message);
+                    try { await ScheduledReport.findByIdAndUpdate(sched._id, { $set: { processing: false } }); } catch (e) { /* swallow */ }
+                }
+            })();
+        }
+
+    } catch (err) {
+        console.error('Scheduler error:', err.message);
+    }
+}
+
+// Start scheduler only when DB is connected and not in test mode. If DB not connected we won't start polling.
+if (process.env.NODE_ENV !== 'test') {
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+        startScheduler();
+    } else {
+        mongoose.connection.on('connected', () => startScheduler());
+        mongoose.connection.on('disconnected', () => stopScheduler());
+    }
+} else {
+    console.log('NODE_ENV=test: scheduler disabled');
+}
+
+// Start the HTTP server and keep a reference so we can close it on shutdown
+const httpServer = app.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+});
+
+// Graceful shutdown to allow process to exit cleanly (close DB, HTTP server, scheduler, and transporter)
+async function gracefulShutdown(reason) {
+    console.log('Graceful shutdown initiated', reason || '');
+    try {
+        stopScheduler();
+        if (httpServer && typeof httpServer.close === 'function') {
+            await new Promise((resolve) => httpServer.close(resolve));
+            console.log('HTTP server closed');
+        }
+        if (mongoose && mongoose.connection && mongoose.connection.readyState === 1) {
+            await mongoose.disconnect();
+            console.log('Mongoose disconnected');
+        }
+        if (transporter && typeof transporter.close === 'function') {
+            try { transporter.close(); console.log('Mailer transporter closed'); } catch (e) { /* ignore */ }
+        }
+    } catch (err) {
+        console.error('Error during graceful shutdown:', err);
+    } finally {
+        // Give Node a moment to cleanup then exit
+        setTimeout(() => process.exit(0), 100);
+    }
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught exception, shutting down:', err);
+    gracefulShutdown('uncaughtException');
+});
+
+// Temporary unauthenticated debug endpoints (remove after debugging)
+app.get('/api/_debug/ping', (req, res) => {
+    res.json({ ok: true, now: new Date().toISOString(), url: req.originalUrl });
+});
+
+app.post('/api/_debug/ping', (req, res) => {
+    res.json({ ok: true, now: new Date().toISOString(), url: req.originalUrl, body: req.body });
+});
+
+// Debug helper: preview how recipients will be mapped to To/BCC without sending mail
+app.post('/api/_debug/preview-send', (req, res) => {
+    try {
+        const { recipientEmail, recipients } = req.body || {};
+        const recArr = Array.isArray(recipients) ? recipients : (typeof recipients === 'string' && recipients.length ? recipients.split(',').map(s => s.trim()).filter(Boolean) : []);
+        const primaryRecipient = recipientEmail || (recArr.length > 0 ? recArr[0] : null);
+        const bccList = recArr.filter(r => r && r !== primaryRecipient);
+        console.log('Preview send - primary:', primaryRecipient, 'bcc:', bccList.join(', '), 'raw recipients:', recipients);
+        return res.json({ primaryRecipient, bcc: bccList, receivedRecipients: recArr });
+    } catch (err) {
+        console.error('preview-send error:', err.message);
+        return res.status(500).json({ message: 'Preview failed', error: err.message });
+    }
+});
+
+// 404 handler for unmatched routes — log the path and return a clear 404
+app.use((req, res) => {
+    console.warn(`404 - No route matched for ${req.method} ${req.originalUrl}`);
+    res.status(404).json({ message: `Not Found: ${req.originalUrl}` });
+});
+

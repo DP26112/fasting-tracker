@@ -57,8 +57,20 @@ const LiveFastDuration: React.FC<LiveFastDurationProps> = ({ startTime, isFastin
 
     }, [startTime, currentTime]); // Re-calculate ONLY when currentTime or startTime changes
 
+    // Reserve a stable width for the timer using a monospace font and a fixed minWidth
+    // Format will be HH:MM:SS which is always 8 characters, so use ch units to reserve space.
     return (
-        <Typography variant="h2" sx={{ color: isFasting ? '#03DAC6' : '#FF7043', mt: -0.5 }}>
+        <Typography
+            variant="h2"
+            sx={{
+                color: isFasting ? '#03DAC6' : '#FF7043',
+                mt: -0.5,
+                // revert to app's default font but still reserve width to avoid jitter
+                minWidth: '9ch',
+                textAlign: 'center',
+                display: 'inline-block'
+            }}
+        >
             {fastStatusText}
         </Typography>
     );
