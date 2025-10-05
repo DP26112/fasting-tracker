@@ -58,7 +58,7 @@ const LiveFastDuration: React.FC<LiveFastDurationProps> = ({ startTime, isFastin
     }, [startTime, currentTime]); // Re-calculate ONLY when currentTime or startTime changes
 
     return (
-        <Typography variant="h2" sx={{ my: 1, color: isFasting ? '#03DAC6' : '#FF7043' }}>
+        <Typography variant="h2" sx={{ color: isFasting ? '#03DAC6' : '#FF7043', mt: -0.5 }}>
             {fastStatusText}
         </Typography>
     );

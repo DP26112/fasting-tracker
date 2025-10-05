@@ -41,8 +41,26 @@ const notesHtml = notesSorted.map(note => {
     return `<li style="margin-bottom: 8px; color: #000;"><strong>${prefix}</strong> — ${note.text}</li>`;
 }).join('');
 
+// Build trophies similar to server logic for preview
+const hrs = Number(sample.currentHours) || 0;
+const goldCount = Math.floor(hrs / 24);
+const remainder = hrs - goldCount * 24;
+const showPartial = goldCount >= 1 && remainder >= 6;
+const partialIsSilver = remainder >= 12;
+let trophyHtml = '';
+const svgFor = (color, size = 18) => `\n        <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle; margin-right:6px;">\n            <path d="M12 2l2.09 4.24L18.6 7l-3.3 2.9L16 14l-4-2-4 2 0.7-4.1L4.4 7l4.51-0.76L12 2z" fill="${color}" />\n        </svg>`;
+for (let i = 0; i < goldCount; i++) {
+    trophyHtml += `<span style="display:inline-flex; align-items:center; vertical-align:middle; margin-right:6px;"><span style=\"font-size:18px; line-height:1; margin-right:6px;\">🏆</span>${svgFor('#FFD700', 18)}</span>`;
+}
+if (showPartial) {
+    if (partialIsSilver) trophyHtml += `<span style="display:inline-flex; align-items:center; vertical-align:middle; margin-right:6px;"><span style=\"font-size:16px; line-height:1; margin-right:6px;\">🥈</span>${svgFor('#C0C0C0', 16)}</span>`;
+    else trophyHtml += `<span style="display:inline-flex; align-items:center; vertical-align:middle; margin-right:6px;"><span style=\"font-size:16px; line-height:1; margin-right:6px;\">🥉</span>${svgFor('#CD7F32', 16)}</span>`;
+}
+if (!trophyHtml) trophyHtml = '<span style="color:#666;">No trophies yet</span>';
+
 const mailHtml = `
 <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+    <div style="margin-bottom:12px;">${trophyHtml}</div>
     <h2 style="color: #000;">Fasting Report Summary</h2>
     <p><strong>Fast Start Time:</strong> ${new Date(sample.startTime).toLocaleString()}</p>
     <p><strong>Current Hours Fasted:</strong> ${sample.currentHours.toFixed(2)} hours</p>

@@ -9,7 +9,7 @@ import {
     Snackbar, Alert,
     Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle
 } from '@mui/material';
-import { AccessTime, Email, WbSunny, WaterDrop, Notes, Delete as DeleteIcon, Send } from '@mui/icons-material';
+import { AccessTime, Email, WbSunny, WaterDrop, Notes, Delete as DeleteIcon, Send, EmojiEvents } from '@mui/icons-material';
 import { differenceInHours, format, parseISO, getDate } from 'date-fns';
 import axios from 'axios';
 import { nanoid } from 'nanoid';
@@ -122,7 +122,8 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
             const start = parseISO(startTime);
             const elapsedMs = new Date().getTime() - start.getTime();
             const preciseHours = elapsedMs / (1000 * 60 * 60);
-            return Math.max(0, parseFloat(preciseHours.toFixed(2)));
+            // return full precision for trophy timing; display formatting is handled elsewhere
+            return Math.max(0, preciseHours);
         } catch {
             return 0;
         }
@@ -203,6 +204,14 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
 
     // 2. Stop Fast: Confirm Action
     const [isSaving, setIsSaving] = useState(false);
+
+    // Auto-hide success alert after 10s for visibility
+    useEffect(() => {
+        if (snackbarSeverity === 'success' && snackbarOpen) {
+            const t = setTimeout(() => setSnackbarOpen(false), 10000);
+            return () => clearTimeout(t);
+        }
+    }, [snackbarSeverity, snackbarOpen]);
 
     const handleConfirmStopFast = async () => {
         setIsStopConfirmOpen(false);
@@ -410,6 +419,7 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                         display: 'flex',
                         flexDirection: { xs: 'column', md: 'row' },
                         minHeight: 250,
+                        alignItems: 'stretch' // ensure columns have equal height so bottoms align
                     }}>
                         {/* LEFT COLUMN: Status Display */}
                         <Box sx={{
@@ -420,23 +430,54 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                             textAlign: 'center',
                             display: 'flex',
                             flexDirection: 'column',
-                            justifyContent: 'center',
-                            alignItems: 'center'
+                            alignItems: 'center',
+                            height: '100%'
                         }}>
                             <Typography variant="h6" color="text.secondary">
                                 <AccessTime sx={{ verticalAlign: 'middle', mr: 1 }} />
                                 Current Fast Duration
                             </Typography>
 
-                            {/* Owner indicator */}
-                            <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>
-                                Active for: {user?.email ?? 'Guest'} {isAuthenticated ? '(you)' : '(not logged in)'}
-                            </Typography>
+                            {/* Top stack: owner, trophies, timer (equal spacing among these) */}
+                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'center' }}>
+                                <Typography variant="caption" color="text.secondary">
+                                    Active for: {user?.email ?? 'Guest'} {isAuthenticated ? '(you)' : '(not logged in)'}
+                                </Typography>
 
-                            <LiveFastDuration
-                                startTime={startTime}
-                                isFasting={isFasting}
-                            />
+                                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', justifyContent: 'center' }}>
+                                    {(() => {
+                                        const hours = hoursFasted || 0;
+                                        const goldCount = Math.floor(hours / 24);
+                                        const remainder = hours - goldCount * 24;
+
+                                        const showPartial = goldCount >= 1 && remainder >= 6;
+                                        const partialType = remainder >= 12 ? 'silver' : 'bronze';
+
+                                        const trophies: Array<JSX.Element> = [];
+                                        for (let i = 0; i < goldCount; i++) {
+                                            trophies.push(
+                                                <EmojiEvents key={`gold-${i}`} sx={{ color: '#FFD700' }} fontSize="small" />
+                                            );
+                                        }
+                                        if (showPartial) {
+                                            if (partialType === 'silver') {
+                                                trophies.push(<EmojiEvents key={`partial-silver`} sx={{ color: '#C0C0C0' }} fontSize="small" />);
+                                            } else {
+                                                trophies.push(<EmojiEvents key={`partial-bronze`} sx={{ color: '#CD7F32' }} fontSize="small" />);
+                                            }
+                                        }
+                                        return trophies;
+                                    })()}
+                                </Box>
+
+                                <LiveFastDuration
+                                    startTime={startTime}
+                                    isFasting={isFasting}
+                                />
+                            </Box>
+
+                            {/* fixed spacer to create symmetric spacing between timer and start time */}
+                            <Box sx={{ height: 2 }} />
 
                             {startTime && (
                                 <Typography variant="body1" color="text.secondary">
@@ -444,19 +485,15 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                                 </Typography>
                             )}
 
-                            {/* Inline success snackbar positioned over the timer */}
-                            {snackbarSeverity === 'success' && (
-                                <Snackbar
-                                    open={snackbarOpen}
-                                    autoHideDuration={9000}
-                                    onClose={() => setSnackbarOpen(false)}
-                                    anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
-                                    sx={{ position: 'absolute', top: 16, left: 0, right: 0, mx: 'auto' }}
-                                >
+                            {/* Inline success alert positioned over the timer (controlled manually for reliability) */}
+                            {snackbarSeverity === 'success' && snackbarOpen && (
+                                <Box sx={{ position: 'absolute', top: 21, left: 5, right: 5, mx: 'auto', zIndex: 1400 }}>
                                     <Alert onClose={() => setSnackbarOpen(false)} severity="success" sx={{ width: '100%' }}>
-                                        {snackbarMessage}
+                                        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'inline-block', maxWidth: '100%' }}>
+                                            {snackbarMessage}
+                                        </span>
                                     </Alert>
-                                </Snackbar>
+                                </Box>
                             )}
                         </Box>
 
@@ -477,7 +514,8 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                             flexDirection: 'column',
                             gap: 2,
                             p: 3,
-                            justifyContent: 'center',
+                            justifyContent: 'flex-start',
+                            height: '100%',
                             alignItems: 'stretch'
                         }}>
                             {/* Dry/Wet Toggle */}
@@ -562,7 +600,7 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                                 </Box>
                             </Collapse>
 
-                            {/* Email Report Button */}
+                            {/* Email Report Button (no spacer) */}
                             <Button
                                 variant="outlined"
                                 color="secondary"
