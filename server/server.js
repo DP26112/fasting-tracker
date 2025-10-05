@@ -210,19 +210,54 @@ app.post('/api/send-report', async (req, res) => {
         return `<li style="margin-bottom: 8px; color: #000;"><strong>${prefix}</strong> — ${note.text}</li>`;
     }).join('');
 
-    const mailOptions = {
+    // Build trophy HTML for the email (same rules as the client)
+    const hrs = Number(currentHours) || 0;
+    const goldCount = Math.floor(hrs / 24);
+    const remainder = hrs - goldCount * 24;
+    const showPartial = goldCount >= 1 && remainder >= 6;
+    const partialIsSilver = remainder >= 12;
+    let trophyHtml = '';
+    const svgFor = (color, size = 18) => `
+        <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle; margin-right:6px;">
+            <path d="M12 2l2.09 4.24L18.6 7l-3.3 2.9L16 14l-4-2-4 2 0.7-4.1L4.4 7l4.51-0.76L12 2z" fill="${color}" />
+        </svg>`;
+
+    // Include both an inline SVG and an emoji fallback per trophy so stricter email clients that strip SVG
+    // will still display a recognizable trophy/medal glyph.
+    for (let i = 0; i < goldCount; i++) {
+        trophyHtml += `<span style="display:inline-flex; align-items:center; vertical-align:middle; margin-right:6px;">
+            <span style=\"font-size:18px; line-height:1; margin-right:6px;\">🏆</span>${svgFor('#FFD700', 18)}</span>`;
+    }
+    if (showPartial) {
+        if (partialIsSilver) {
+            trophyHtml += `<span style="display:inline-flex; align-items:center; vertical-align:middle; margin-right:6px;">
+                <span style=\"font-size:16px; line-height:1; margin-right:6px;\">🥈</span>${svgFor('#C0C0C0', 16)}</span>`;
+        } else {
+            trophyHtml += `<span style="display:inline-flex; align-items:center; vertical-align:middle; margin-right:6px;">
+                <span style=\"font-size:16px; line-height:1; margin-right:6px;\">🥉</span>${svgFor('#CD7F32', 16)}</span>`;
+        }
+    }
+    if (!trophyHtml) trophyHtml = '<span style="color:#666;">No trophies yet</span>';
+
+    console.log('send-report: trophyHtml ->', trophyHtml);
+
+    const mailOptions = {
         from: `Fasting Tracker Report <${EMAIL_USER}>`,
         to: recipientEmail,
         subject: `Fasting Status Report - ${currentHours.toFixed(2)} Hours`,
         html: `
             <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <!-- Trophy summary (exalted above the report) -->
+                <div style="margin-bottom:12px;">
+                    ${trophyHtml}
+                </div>
                 <h2 style="color: #000;">Fasting Report Summary</h2>
                 <p><strong>Fast Start Time:</strong> ${new Date(startTime).toLocaleString()}</p>
                 <p><strong>Current Hours Fasted:</strong> ${currentHours.toFixed(2)} hours</p>
                 <p><strong>Fast Type:</strong> <span style="font-weight: bold; text-transform: uppercase; color: ${fastType === 'dry' ? '#D32F2F' : '#2196F3'};">${fastType} Fast</span></p>
-                
+
                 <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
-                
+
                 <h3 style="color: #000;">Fasting Notes:</h3>
                 ${notes.length > 0 ? `<ul style="padding-left: 20px; list-style-type: none; color: #000;">${notesHtml}</ul>` : '<p>No notes logged during this fast.</p>'}
             </div>
