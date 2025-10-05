@@ -9,7 +9,6 @@ import {
     List,
     ListItem,
     ListItemText,
-    Grid,
     Divider,
     IconButton,
 } from '@mui/material';
@@ -30,6 +29,11 @@ const FastHistoryItem: React.FC<FastHistoryItemProps> = React.memo(({ fast, onDe
         const m = Math.round((hours % 1) * 60); 
         return `${h}h ${m}m`;
     };
+    // Local expansion state to lazy-render details only when expanded
+    const [expanded, setExpanded] = React.useState(false);
+    const handleChange = React.useCallback((_: React.SyntheticEvent, isExpanded: boolean) => {
+        setExpanded(isExpanded);
+    }, []);
     
     return (
         <Card raised sx={{ mb: 2, background: 'background.paper' }}>
@@ -37,27 +41,27 @@ const FastHistoryItem: React.FC<FastHistoryItemProps> = React.memo(({ fast, onDe
             <Accordion
                 disableGutters
                 sx={{ background: 'transparent' }}
-                TransitionProps={{ // This should correctly pass to the internal <Collapse> component.
-                    unmountOnExit: true,
-                }}
+                TransitionProps={{ unmountOnExit: true }}
+                expanded={expanded}
+                onChange={handleChange}
             >
                 <AccordionSummary
                     expandIcon={<ExpandMoreIcon />}
                     sx={{ '& .MuiAccordionSummary-content': { margin: '12px 0' } }}
                     component="div"
                 >
-                    <Grid container spacing={2} alignItems="center">
-                        <Grid grid={{ xs: 12, sm: 4 }}>
+                    <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'center', gap: 2, width: '100%' }}>
+                        <Box sx={{ width: { xs: '100%', sm: '33%' } }}>
                             <Typography variant="h6" color="secondary.main">
                                 {fast.durationHours.toFixed(2)} Hrs
                             </Typography>
-                        </Grid>
-                        <Grid grid={{ xs: 12, sm: 5 }}>
+                        </Box>
+                        <Box sx={{ width: { xs: '100%', sm: '34%' } }}>
                             <Typography variant="body1" color="text.secondary">
                                 {format(parseISO(fast.endTime), 'MMM d, yyyy')}
                             </Typography>
-                        </Grid>
-                        <Grid grid={{ xs: 12, sm: 3 }} sx={{ textAlign: 'right' }}>
+                        </Box>
+                        <Box sx={{ width: { xs: '100%', sm: '33%' }, textAlign: 'right' }}>
                             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 1 }}>
                                 <Typography variant="body2" sx={{ color: fast.fastType === 'dry' ? 'error.main' : 'info.main', whiteSpace: 'nowrap' }}>
                                     {fast.fastType.toUpperCase()}
@@ -75,12 +79,13 @@ const FastHistoryItem: React.FC<FastHistoryItemProps> = React.memo(({ fast, onDe
                                     <DeleteIcon sx={{ fontSize: 16 }} />
                                 </IconButton>
                             </Box>
-                        </Grid>
-                    </Grid>
+                        </Box>
+                    </Box>
                 </AccordionSummary>
 
-                <AccordionDetails sx={{ pt: 0, borderTop: '1px solid #333' }}>
-                    <Box sx={{ p: 2 }}>
+                {expanded && (
+                    <AccordionDetails sx={{ pt: 0, borderTop: '1px solid #333' }}>
+                        <Box sx={{ p: 2 }}>
                         <Typography variant="body2" color="text.secondary">
                             <Event sx={{ fontSize: 16, verticalAlign: 'middle', mr: 0.5 }} /> Started: {format(parseISO(fast.startTime), 'MMM d, h:mm a')}
                         </Typography>
@@ -98,8 +103,8 @@ const FastHistoryItem: React.FC<FastHistoryItemProps> = React.memo(({ fast, onDe
                                     {fast.notes.map((note: Note, index) => {
                                         const noteTime = parseISO(note.time);
                                         
-                                        const prefix = note.duration !== undefined
-                                            ? `[${formatDuration(note.duration)}] ${format(noteTime, 'MMM d, h:mm a')}`
+                                        const prefix = note.fastHours !== undefined
+                                            ? `[${formatDuration(note.fastHours)}] ${format(noteTime, 'MMM d, h:mm a')}`
                                             : `${format(noteTime, 'MMM d, h:mm a')}`;
                                             
                                         return (
@@ -116,6 +121,7 @@ const FastHistoryItem: React.FC<FastHistoryItemProps> = React.memo(({ fast, onDe
                         )}
                     </Box>
                 </AccordionDetails>
+                )}
             </Accordion>
         </Card>
     );

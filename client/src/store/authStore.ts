@@ -25,53 +25,60 @@ type AuthStore = {
 
 const API_BASE = 'http://localhost:3001/api';
 
-export const useAuthStore = create<AuthStore>((set, get) => ({
-  user: null,
-  token: localStorage.getItem('token'),
-  isAuthenticated: !!localStorage.getItem('token'),
-  isLoading: false,
-  authError: null,
+export const useAuthStore = create<AuthStore>((set, get) => {
+  // call get() once to avoid unused-parameter errors; harmless read
+  const _initial = get();
+  void _initial;
 
-  // Login using email + password
-  login: async (email: string, password: string) => {
-    set({ isLoading: true, authError: null });
-    try {
-      const response = await axios.post(`${API_BASE}/auth/login`, { email, password });
-      const { user, token } = response.data;
+  return {
+    user: null,
+    token: localStorage.getItem('token'),
+    isAuthenticated: !!localStorage.getItem('token'),
+    isLoading: false,
+    authError: null,
 
-      if (!token) {
-        set({ authError: 'No token received from server.', isLoading: false });
+    // Login using email + password
+    login: async (email: string, password: string) => {
+      set({ isLoading: true, authError: null });
+      try {
+        const response = await axios.post(`${API_BASE}/auth/login`, { email, password });
+        const { user, token } = response.data;
+
+        if (!token) {
+          set({ authError: 'No token received from server.', isLoading: false });
+          return false;
+        }
+
+        localStorage.setItem('token', token);
+        set({ token, user: user || null, isAuthenticated: true, isLoading: false, authError: null });
+        return true;
+      } catch (err) {
+        const errResp: any = (err as AxiosError).response;
+        const errorMessage = errResp?.data?.message || 'Login failed: Invalid credentials.';
+        set({ authError: errorMessage, isLoading: false });
+        console.error('Login failed:', (err as AxiosError).message);
         return false;
       }
+    },
 
+    // Use an existing token (e.g. right after registration)
+    loginWithToken: (token: string, user: User | null = null) => {
       localStorage.setItem('token', token);
-      set({ token, user: user || null, isAuthenticated: true, isLoading: false, authError: null });
-      return true;
-    } catch (err) {
-      const errorMessage = (err as AxiosError).response?.data?.message || 'Login failed: Invalid credentials.';
-      set({ authError: errorMessage, isLoading: false });
-      console.error('Login failed:', (err as AxiosError).message);
-      return false;
-    }
-  },
+      set({ token, user, isAuthenticated: true, authError: null, isLoading: false });
+    },
 
-  // Use an existing token (e.g. right after registration)
-  loginWithToken: (token: string, user: User | null = null) => {
-    localStorage.setItem('token', token);
-    set({ token, user, isAuthenticated: true, authError: null, isLoading: false });
-  },
+    logout: () => {
+      localStorage.removeItem('token');
+      set({ token: null, user: null, isAuthenticated: false });
+    },
 
-  logout: () => {
-    localStorage.removeItem('token');
-    set({ token: null, user: null, isAuthenticated: false });
-  },
+    // Optional: initialize on app start (can be called from App or main)
+    initializeAuth: async () => {
+      const token = localStorage.getItem('token');
+      if (!token) return;
 
-  // Optional: initialize on app start (can be called from App or main)
-  initializeAuth: async () => {
-    const token = localStorage.getItem('token');
-    if (!token) return;
-
-    // Optionally verify token with server; keep it simple for now and mark authenticated
-    set({ token, isAuthenticated: true });
-  },
-}));
+      // Optionally verify token with server; keep it simple for now and mark authenticated
+      set({ token, isAuthenticated: true });
+    },
+  };
+});

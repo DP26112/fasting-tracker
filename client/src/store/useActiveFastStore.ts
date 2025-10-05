@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import axios from 'axios';
-import { Note, FastType } from '../types'; // Import your types
+import type { Note, FastType } from '../types'; // Import your types
 
 const API_URL = 'http://localhost:3001/api';
 
