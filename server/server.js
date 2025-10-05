@@ -27,9 +27,13 @@ const JWT_SECRET = process.env.JWT_SECRET;
 // --- DATABASE CONNECTION (Using .env) ---
 const DB_URL = process.env.MONGO_URI; 
 
-mongoose.connect(DB_URL)
-  .then(() => console.log('MongoDB Atlas connected successfully! 🚀'))
-  .catch(err => console.error('MongoDB connection error:', err));
+if (DB_URL) {
+        mongoose.connect(DB_URL)
+            .then(() => console.log('MongoDB Atlas connected successfully! 🚀'))
+            .catch(err => console.error('MongoDB connection error:', err));
+} else {
+        console.warn('MONGO_URI not set — skipping MongoDB connection. Some routes will be disabled.');
+}
 // ----------------------------------------
 
 
@@ -46,6 +50,33 @@ const transporter = nodemailer.createTransport({
     }
 });
 // ----------------------------------------
+
+// --- Helper: format dates like frontend: MM/DD/YY | h:mm AM/PM ---
+function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+function formatNoteTimestamp(dateInput) {
+    const d = new Date(dateInput);
+    if (isNaN(d.getTime())) return '';
+    const mm = pad2(d.getMonth() + 1);
+    const dd = pad2(d.getDate());
+    const yy = String(d.getFullYear()).slice(-2);
+
+    // 12-hour time
+    let hrs = d.getHours();
+    const ampm = hrs >= 12 ? 'PM' : 'AM';
+    hrs = hrs % 12;
+    if (hrs === 0) hrs = 12;
+    const mins = pad2(d.getMinutes());
+    return `${mm}/${dd}/${yy} | ${hrs}:${mins} ${ampm}`;
+}
+
+function formatHourValue(val) {
+    const num = Number(val);
+    if (Number.isFinite(num)) {
+        // one decimal place, trim trailing zeros (but keep one decimal like 18.0 -> 18.0)
+        return num.toFixed(1);
+    }
+    return null;
+}
 
 
 // --- Middleware ---
@@ -161,40 +192,59 @@ app.post('/api/send-report', async (req, res) => {
 
     console.log(`Attempting to send report to: ${recipientEmail}`);
 
-    const notesHtml = notes.map(note => 
-        `<li style="margin-bottom: 5px;"><strong>${new Date(note.time).toLocaleTimeString()}</strong> - ${note.text}</li>`
-    ).join('');
+    // ensure notes are sorted newest-first
+    const originalNotes = (notes || []);
+    console.log('send-report: original note times:', originalNotes.map(n => n.time));
+    let notesSorted = originalNotes.slice().sort((a, b) => new Date(b.time) - new Date(a.time));
+    const allInvalidTimes = notesSorted.length > 0 && notesSorted.every(n => isNaN(new Date(n.time).getTime()));
+    if (allInvalidTimes) {
+        console.warn('send-report: note times appear invalid; falling back to reversing original array to put newest-first');
+        notesSorted = originalNotes.slice().reverse();
+    }
+    console.log('send-report: sorted note times:', notesSorted.map(n => n.time));
+    const notesHtml = notesSorted.map(note => {
+        const timeStr = formatNoteTimestamp(note.time);
+        const atHourRaw = note.fastHours ?? note.fastHour ?? note.duration ?? null;
+        const atHour = formatHourValue(atHourRaw);
+        const prefix = atHour != null ? `${timeStr} @ ${atHour}h` : `${timeStr}`;
+        return `<li style="margin-bottom: 8px; color: #000;"><strong>${prefix}</strong> — ${note.text}</li>`;
+    }).join('');
 
     const mailOptions = {
         from: `Fasting Tracker Report <${EMAIL_USER}>`,
         to: recipientEmail,
         subject: `Fasting Status Report - ${currentHours.toFixed(2)} Hours`,
-        html: `
-            <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                <h2 style="color: #6200EE;">Fasting Report Summary</h2>
-                <p><strong>Fast Start Time:</strong> ${new Date(startTime).toLocaleString()}</p>
-                <p><strong>Current Hours Fasted:</strong> ${currentHours.toFixed(2)} hours</p>
-                <p><strong>Fast Type:</strong> <span style="font-weight: bold; text-transform: uppercase; color: ${fastType === 'dry' ? '#D32F2F' : '#2196F3'};">${fastType} Fast</span></p>
-                
-                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
-                
-                <h3 style="color: #6200EE;">Fasting Notes:</h3>
-                ${notes.length > 0 ? `<ul style="padding-left: 20px; list-style-type: none;">${notesHtml}</ul>` : '<p>No notes logged during this fast.</p>'}
-            </div>
-        `
+        html: `
+            <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <h2 style="color: #000;">Fasting Report Summary</h2>
+                <p><strong>Fast Start Time:</strong> ${new Date(startTime).toLocaleString()}</p>
+                <p><strong>Current Hours Fasted:</strong> ${currentHours.toFixed(2)} hours</p>
+                <p><strong>Fast Type:</strong> <span style="font-weight: bold; text-transform: uppercase; color: ${fastType === 'dry' ? '#D32F2F' : '#2196F3'};">${fastType} Fast</span></p>
+                
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+                
+                <h3 style="color: #000;">Fasting Notes:</h3>
+                ${notes.length > 0 ? `<ul style="padding-left: 20px; list-style-type: none; color: #000;">${notesHtml}</ul>` : '<p>No notes logged during this fast.</p>'}
+            </div>
+        `
     };
 
-    try {
-        await transporter.sendMail(mailOptions);
-        console.log('Email sent successfully!');
-        res.status(200).send({ message: 'Email sent successfully!' });
-    } catch (error) {
-        console.error('Error sending email:', error.message);
-        res.status(500).send({ 
-            message: 'Failed to send email. Check Nodemailer configuration.', 
-            error: error.message 
-        });
-    }
+    // Debug: print HTML for verification (helps when mail delivery may fail)
+    console.log('=== Generated Email HTML (send-report) ===');
+    console.log(mailOptions.html);
+    console.log('=== End Generated Email HTML ===');
+
+    try {
+        await transporter.sendMail(mailOptions);
+        console.log('Email sent successfully!');
+        res.status(200).send({ message: 'Email sent successfully!' });
+    } catch (error) {
+        console.error('Error sending email:', error.message);
+        res.status(500).send({ 
+            message: 'Failed to send email. Check Nodemailer configuration.', 
+            error: error.message 
+        });
+    }
 });
 
 
@@ -215,43 +265,60 @@ app.post('/api/email-history', async (req, res) => {
             return res.status(404).send({ message: 'No fasts found to report.' });
         }
 
-        const historyHtml = history.map(fast => {
-            const startDate = new Date(fast.startTime).toLocaleString();
-            const endDate = new Date(fast.endTime).toLocaleString();
-            const notesHtml = fast.notes.map(note => 
-                `<li>- ${new Date(note.time).toLocaleTimeString()} : ${note.text}</li>`
-            ).join('');
+        const historyHtml = history.map(fast => {
+            const startDate = new Date(fast.startTime).toLocaleString();
+            const endDate = new Date(fast.endTime).toLocaleString();
+            const originalNotes = (fast.notes || []);
+            console.log(`email-history: fast ${fast._id} original note times:`, originalNotes.map(n => n.time));
+            let notesSorted = originalNotes.slice().sort((a, b) => new Date(b.time) - new Date(a.time));
+            const allInvalidTimes = notesSorted.length > 0 && notesSorted.every(n => isNaN(new Date(n.time).getTime()));
+            if (allInvalidTimes) {
+                console.warn(`email-history: fast ${fast._id} note times invalid; reversing original notes`);
+                notesSorted = originalNotes.slice().reverse();
+            }
+            console.log(`email-history: fast ${fast._id} sorted note times:`, notesSorted.map(n => n.time));
+            const notesHtml = notesSorted.map(note => {
+                const full = formatNoteTimestamp(note.time);
+                const atHour = formatHourValue(note.fastHours ?? note.fastHour ?? note.duration ?? null);
+                const prefix = atHour != null ? `${full} @ ${atHour}h` : `${full}`;
+                return `<li style="margin-bottom:8px; color:#000;"><strong>${prefix}</strong> — ${note.text}</li>`;
+            }).join('');
 
-            return `
-                <div style="border: 1px solid #ddd; padding: 10px; margin-bottom: 15px; border-radius: 5px;">
-                    <h4 style="color: #6200EE; margin-top: 0;">${fast.durationHours.toFixed(2)} Hours (${fast.fastType.toUpperCase()})</h4>
-                    <p style="margin: 5px 0;"><strong>Completed:</strong> ${endDate}</p>
-                    <p style="margin: 5px 0;"><strong>Started:</strong> ${startDate}</p>
-                    ${fast.notes.length > 0 ? 
-                        `<strong>Notes:</strong><ul style="list-style-type: none; padding-left: 10px; font-size: 0.9em;">${notesHtml}</ul>` : 
-                        '<p style="font-style: italic;">No notes logged.</p>'
-                    }
-                </div>
-            `;
-        }).join('');
+            return `
+                <div style="border: 1px solid #ddd; padding: 10px; margin-bottom: 15px; border-radius: 5px;">
+                    <h4 style="color: inherit; margin-top: 0;">${fast.durationHours.toFixed(2)} Hours (${fast.fastType.toUpperCase()})</h4>
+                    <p style="margin: 5px 0;"><strong>Completed:</strong> ${endDate}</p>
+                    <p style="margin: 5px 0;"><strong>Started:</strong> ${startDate}</p>
+                    ${fast.notes && fast.notes.length > 0 ? 
+                        `<strong>Notes:</strong><ul style="list-style-type: none; padding-left: 10px; font-size: 0.95em; color:#000;">${notesHtml}</ul>` : 
+                        '<p style="font-style: italic; color:#000;">No notes logged.</p>'
+                    }
+                </div>
+            `;
+        }).join('');
 
         const mailOptions = {
             from: `Fasting Tracker Report <${EMAIL_USER}>`,
             to: recipientEmail,
             subject: `Complete Fasting History Report (${history.length} Entries)`,
-            html: `
-                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                    <h2 style="color: #6200EE;">Complete Fasting History</h2>
-                    <p>Attached below are all ${history.length} logged fasts from your tracker.</p>
-                    <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
-                    ${historyHtml}
-                </div>
-            `
+            html: `
+                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                    <h2 style="color: #000;">Complete Fasting History</h2>
+                    <p>Attached below are all ${history.length} logged fasts from your tracker.</p>
+                    <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+                    ${historyHtml}
+                </div>
+            `
         };
 
-        await transporter.sendMail(mailOptions);
-        console.log('History email sent successfully!');
-        res.status(200).send({ message: 'Complete history emailed successfully!' });
+    // Debug: print HTML for verification
+    console.log('=== Generated Email HTML (email-history) ===');
+    console.log(mailOptions.html);
+    console.log('=== End Generated Email HTML ===');
+
+    await transporter.sendMail(mailOptions);
+    console.log('History email sent successfully!');
+    res.status(200).send({ message: 'Complete history emailed successfully!' });
 
     } catch (error) {
         console.error('Error emailing history:', error);
@@ -350,6 +417,11 @@ const INACTIVE_USER_HOURS = 360; // 15 days
 
 async function cleanupStaleActiveFasts() {
     try {
+        // If mongoose isn't connected yet, skip cleanup to avoid buffering/timeouts
+        if (!mongoose || !mongoose.connection || mongoose.connection.readyState !== 1) {
+            console.log('cleanupStaleActiveFasts: mongoose not connected, skipping cleanup.');
+            return 0;
+        }
         const cutoffActive = new Date(Date.now() - STALE_ACTIVE_HOURS * HOUR);
         const cutoffLogin = new Date(Date.now() - INACTIVE_USER_HOURS * HOUR);
 
@@ -379,9 +451,11 @@ async function cleanupStaleActiveFasts() {
     }
 }
 
-// Run cleanup on startup and every 6 hours thereafter
-cleanupStaleActiveFasts();
-setInterval(cleanupStaleActiveFasts, 6 * HOUR);
+// Run cleanup after a short delay (gives mongoose time to connect) and every 6 hours thereafter
+setTimeout(() => {
+    cleanupStaleActiveFasts().catch(err => console.error('Initial cleanup failed:', err));
+    setInterval(cleanupStaleActiveFasts, 6 * HOUR);
+}, 30 * 1000);
 
 // Admin endpoint to trigger cleanup on demand (protected)
 app.post('/api/admin/cleanup-active-fasts', requireAuth, async (req, res) => {

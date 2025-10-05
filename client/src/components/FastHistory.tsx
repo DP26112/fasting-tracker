@@ -260,16 +260,35 @@ const FastHistory: React.FC = () => {
                                                         <Typography variant="subtitle2" color="primary" sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
                                                             <Notes sx={{ fontSize: 18, mr: 0.5 }} /> Logged Notes:
                                                         </Typography>
-                                                        <List dense disablePadding>
-                                                            {fast.notes.map((note, index) => (
-                                                                <ListItem key={index} disableGutters sx={{ py: 0 }}>
-                                                                    <ListItemText
-                                                                        primary={`${format(parseISO(note.time), 'h:mm a')}: ${note.text}`}
-                                                                        primaryTypographyProps={{ variant: 'caption', color: 'text.primary' }}
-                                                                    />
-                                                                </ListItem>
-                                                            ))}
-                                                        </List>
+                                                        <Box sx={{
+                                                            position: 'relative',
+                                                            // use explicit px values so MUI doesn't mismatch unit types
+                                                            maxHeight: { xs: '180px', md: '380px' },
+                                                            overflowY: 'auto',
+                                                            width: '100%',
+                                                            // STRONG TEMP HIGHLIGHT: very visible so it's easy to spot
+                                                            border: '3px solid rgba(255,64,129,0.95)',
+                                                            backgroundColor: 'rgba(255,64,129,0.06)',
+                                                            borderRadius: 1,
+                                                            boxShadow: '0 8px 24px rgba(255,64,129,0.06)',
+                                                            p: 1,
+                                                            // allow this box to shrink within accordions and show internal scroll
+                                                            minHeight: 0
+                                                        }}>
+                                                            <Box sx={{ position: 'absolute', top: 8, left: 12, bgcolor: 'rgba(255,235,59,0.98)', color: '#000', px: 1, py: 0.35, borderRadius: 0.5, zIndex: 20, fontWeight: 'bold', fontSize: '0.75rem' }}>
+                                                                TEMP HIGHLIGHT
+                                                            </Box>
+                                                            <List dense disablePadding>
+                                                                {fast.notes.map((note, index) => (
+                                                                    <ListItem key={index} disableGutters sx={{ py: 0 }}>
+                                                                        <ListItemText
+                                                                            primary={`${format(parseISO(note.time), 'h:mm a')}: ${note.text}`}
+                                                                            primaryTypographyProps={{ variant: 'caption', color: 'text.primary' }}
+                                                                        />
+                                                                    </ListItem>
+                                                                ))}
+                                                            </List>
+                                                        </Box>
                                                     </>
                                                 )}
                                             </Box>
@@ -331,9 +350,12 @@ const FastHistory: React.FC = () => {
                 open={snackbarOpen}
                 autoHideDuration={6000}
                 onClose={() => setSnackbarOpen(false)}
-                message={snackbarMessage}
                 anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-            />
+            >
+                <Alert onClose={() => setSnackbarOpen(false)} severity="success" sx={{ width: '100%' }}>
+                    {snackbarMessage}
+                </Alert>
+            </Snackbar>
             
             {/* NEW CONFIRMATION DIALOG COMPONENT */}
             <Dialog
