@@ -5,10 +5,11 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     Typography, Box, Card, CardContent, Button,
     TextField, ToggleButton, ToggleButtonGroup,
-    Divider, Paper, Collapse, Switch, FormControlLabel,
-    Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle
+    Divider, Paper, Collapse, Switch, FormControlLabel, Badge,
+    Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle,
+    Snackbar, Alert
 } from '@mui/material';
-import { AccessTime, Email, WbSunny, WaterDrop, Notes, Delete as DeleteIcon } from '@mui/icons-material';
+import { AccessTime, Email, WbSunny, WaterDrop, Notes, Delete as DeleteIcon, Person as PersonIcon } from '@mui/icons-material';
 import Trophies from './Trophies';
 import { format, parseISO, getDate } from 'date-fns';
 import { nanoid } from 'nanoid';
@@ -66,16 +67,11 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
     const [customTimeInput, setCustomTimeInput] = useState<string>('');
     const [showCustomTime, setShowCustomTime] = useState<boolean>(false);
     
-    // Snackbar removed from this component; provide default values and no-op setters so existing call sites remain safe.
-    const snackbarOpen: boolean = false;
-    const snackbarMessage: string = '';
-    const snackbarSeverity: 'success' | 'error' | 'info' = 'info';
-    const snackbarDuration: number = 6000;
-    const setSnackbarMessage = (_: string) => {};
-    const setSnackbarSeverity = (_: 'success' | 'error' | 'info') => {};
-    const setSnackbarOpen = (_: boolean) => {};
-    const setSnackbarDuration = (_: number) => {};
-    void snackbarOpen; void snackbarMessage; void snackbarSeverity; void snackbarDuration; void setSnackbarMessage; void setSnackbarSeverity; void setSnackbarOpen; void setSnackbarDuration;
+    // Snackbar state for user feedback
+    const [snackbarOpen, setSnackbarOpen] = useState(false);
+    const [snackbarMessage, setSnackbarMessage] = useState<string>('');
+    const [snackbarSeverity, setSnackbarSeverity] = useState<'success' | 'error' | 'warning' | 'info'>('info');
+    const snackbarDuration = 4000;
     
     // Confirmation Dialog States
     const [isStopConfirmOpen, setIsStopConfirmOpen] = useState(false);
@@ -90,6 +86,8 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
     // automation toggle state (initially false)
     const [automationEnabled, setAutomationEnabled] = useState<boolean>(false);
     const [automationPending, setAutomationPending] = useState<boolean>(false);
+    // store merged recipients returned from the server when automation is enabled
+    const [automationRecipients, setAutomationRecipients] = useState<string[]>([]);
     // additional email input is now uncontrolled for snappy typing
     const additionalEmailRef = useRef<AdditionalEmailInputHandle | null>(null);
     // no local schedule id tracked anymore (modal removed)
@@ -333,8 +331,23 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
         try {
             // parse additional emails from uncontrolled input (comma-separated)
             const extrasRaw = additionalEmailRef.current?.getValue() || '';
-            const extras = extrasRaw.split(',').map(e => e.trim()).filter(Boolean);
-            const recipients = [userEmail, ...extras];
+            const rawExtras = extrasRaw.split(',').map(e => e.trim()).filter(Boolean);
+            // simple regex validation (no verification flow) - keep it permissive but catch obvious invalids
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            const validExtras: string[] = [];
+            const invalidExtras: string[] = [];
+            for (const e of rawExtras) {
+                if (emailRegex.test(e)) validExtras.push(e);
+                else invalidExtras.push(e);
+            }
+
+            if (invalidExtras.length > 0) {
+                setSnackbarMessage(`Ignored invalid email(s): ${invalidExtras.join(', ')}`);
+                setSnackbarSeverity('warning');
+                setSnackbarOpen(true);
+            }
+
+            const recipients = [userEmail, ...validExtras];
 
             const payload = {
                 startTime,
@@ -343,9 +356,11 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                 notes: [...notes].reverse(),
                 recipientEmail: userEmail,
                 recipients: recipients,
+                // Explicitly request the server to enable automation when the client automation toggle is on
+                autoEnableSchedule: automationEnabled === true
             };
             console.log('Sending status report payload:', payload);
-            await api.post('/send-report', payload);
+            const resp = await api.post('/send-report', payload);
             
             console.log('Status report sent to user email');
             // show transient success UI
@@ -356,9 +371,32 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                 setSendSuccess(false);
                 sendSuccessTimer.current = null;
             }, 2000);
-            // clear the additional recipients input so user sees a clean state
-            // only clear when automation is NOT enabled (user may want to keep list when automation is on)
-            try { if (!automationEnabled) additionalEmailRef.current?.clear(); } catch { /* ignore */ }
+                // clear the additional recipients input so user sees a clean state
+                try { additionalEmailRef.current?.clear(); } catch { /* ignore */ }
+            // If the server returned an authoritative schedule object, use it to immediately update the badge/recipients
+            try {
+                const sched = resp?.data?.schedule ?? null;
+                    if (sched && Array.isArray(sched.recipients)) {
+                    setAutomationRecipients(sched.recipients);
+                    // if automation was enabled by this action, ensure local toggle reflects it
+                    if (sched.enabled) {
+                        setAutomationEnabled(true);
+                    }
+                } else if (automationEnabled && isAuthenticated) {
+                    // If no schedule was returned, fetch the authoritative schedule to keep UI in sync.
+                    try {
+                        const getResp = await api.get('/schedule-status-report', { params: { startTime } });
+                        const fetched = getResp?.data?.schedule ?? null;
+                        const recs = (fetched && Array.isArray(fetched.recipients)) ? fetched.recipients : [];
+                        setAutomationRecipients(recs);
+                        if (fetched && fetched.enabled) setAutomationEnabled(true);
+                    } catch (err) {
+                        console.error('Failed to fetch schedule after send-report', err);
+                    }
+                }
+            } catch (e) {
+                // ignore
+            }
         } catch (err) {
             console.error('Failed to send status report', err);
         } finally {
@@ -374,13 +412,22 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
         }
 
         setAutomationPending(true);
-        try {
-            if (checked) {
-                // enable automation: send recipients as user's email if available
-                const recipient = user?.email ? [user.email] : [];
-                const resp = await api.post('/schedule-status-report', { startTime, recipients: recipient });
-                console.log('Automation enabled', resp?.data);
-                setAutomationEnabled(true);
+            try {
+                if (checked) {
+                    // enable automation: do not send recipients from client; let server merge defaults
+                    const resp = await api.post('/schedule-status-report', { startTime });
+                    console.log('Automation enabled', resp?.data);
+                    setAutomationEnabled(true);
+                    // fetch the saved schedule to get the merged recipients and store locally
+                    try {
+                        const getResp = await api.get('/schedule-status-report', { params: { startTime } });
+                        const sched = getResp?.data?.schedule ?? null;
+                        const recs = (sched && Array.isArray(sched.recipients)) ? sched.recipients : [];
+                        setAutomationRecipients(recs);
+                    } catch (err) {
+                        console.error('Failed to fetch merged schedule after enabling automation', err);
+                        setAutomationRecipients([]);
+                    }
                 try {
                     // persist locally so the toggle stays on even after logout
                     if (user?.id) {
@@ -390,11 +437,39 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                 } catch (e) {
                     console.error('Failed to persist automation state locally', e);
                 }
-            } else {
-                // disable automation
-                await api.delete('/schedule-status-report', { data: { startTime } });
-                console.log('Automation disabled');
-                setAutomationEnabled(false);
+                } else {
+                    // disable automation: optimistic UI update
+                    setAutomationEnabled(false);
+                    setAutomationRecipients([]);
+                    try {
+                        // persist disable on server. Use query params because some intermediaries strip bodies for DELETE.
+                        await api.delete('/schedule-status-report', { params: { startTime } });
+                        console.log('Automation disabled');
+
+                        // After disabling, fetch the authoritative schedule from the server so client reflects canonical state
+                        try {
+                            const getResp = await api.get('/schedule-status-report', { params: { startTime } });
+                            const sched = getResp?.data?.schedule ?? null;
+                            const recs = (sched && Array.isArray(sched.recipients)) ? sched.recipients : [];
+                            // if server still thinks there are recipients, honor server by updating state (this is rare)
+                            setAutomationRecipients(recs);
+                        } catch (err) {
+                            console.error('Failed to fetch schedule after disabling automation', err);
+                            // keep optimistic cleared recipients
+                        }
+                    } catch (err) {
+                        console.error('Failed to persist automation disable', err);
+                        // If persistence failed, try to restore by fetching server state
+                        try {
+                            const getResp = await api.get('/schedule-status-report', { params: { startTime } });
+                            const sched = getResp?.data?.schedule ?? null;
+                            const recs = (sched && Array.isArray(sched.recipients)) ? sched.recipients : [];
+                            setAutomationRecipients(recs);
+                            setAutomationEnabled(!!(sched && sched.enabled));
+                        } catch (e) {
+                            console.error('Failed to recover schedule after failed disable', e);
+                        }
+                    }
                 try {
                     if (user?.id) {
                         const key = `automation:${user.id}:${startTime}`;
@@ -435,17 +510,22 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                 if (isAuthenticated) {
                     try {
                         const resp = await api.get('/schedule-status-report', { params: { startTime } });
-                        // expect resp.data.exists or a non-empty array of schedules depending on API
-                        const exists = resp?.data?.exists ?? (Array.isArray(resp?.data) ? resp.data.length > 0 : false);
+                        const sched = resp?.data?.schedule ?? null;
                         if (!mounted) return;
-                        if (exists) {
-                            setAutomationEnabled(true);
-                            // persist local copy as truth
-                            if (user?.id) {
+                        if (sched) {
+                            // Restore recipients and enabled flag from the authoritative schedule
+                            const recs = Array.isArray(sched.recipients) ? sched.recipients : [];
+                            setAutomationRecipients(recs);
+                            setAutomationEnabled(!!sched.enabled);
+                            // persist locally if enabled so UI can be snappier
+                            if (sched.enabled && user?.id) {
                                 localStorage.setItem(`automation:${user.id}:${startTime}`, '1');
+                            } else if (user?.id) {
+                                localStorage.removeItem(`automation:${user.id}:${startTime}`);
                             }
                         } else {
                             setAutomationEnabled(false);
+                            setAutomationRecipients([]);
                             if (user?.id) {
                                 localStorage.removeItem(`automation:${user.id}:${startTime}`);
                             }
@@ -687,7 +767,8 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                             {/* Optional Additional Email Input (uncontrolled for snappy typing) */}
                                 <AdditionalEmailInput
                                     ref={additionalEmailRef}
-                                    disabled={!isFasting || automationEnabled}
+                                    // Only disable the input when there is no active fast. Keep it editable while automation is on.
+                                    disabled={!isFasting}
                                     placeholder="Additional recipient emails (comma-separated)"
                                 />
 
@@ -715,7 +796,25 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                                                 color="primary"
                                             />
                                         }
-                                        label="Auto-send status reports"
+                                        label={
+                                            <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 1 }}>
+                                                <Box component="span">Auto-send status reports</Box>
+                                                {/* Primary user icon (primary color) - no number */}
+                                                <PersonIcon sx={{ color: automationEnabled ? 'primary.main' : 'text.secondary', fontSize: 18, verticalAlign: 'middle' }} />
+                                                {/* Additional recipients: show badge only when automation is enabled and additional recipients exist */}
+                                                {automationEnabled && automationRecipients && Math.max(0, automationRecipients.length - 1) > 0 ? (
+                                                    <Badge
+                                                        badgeContent={Math.max(0, automationRecipients.length - 1)}
+                                                        color="secondary"
+                                                        overlap="rectangular"
+                                                        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+                                                        sx={{ '& .MuiBadge-badge': { transform: 'translate(8px,-8px)', fontSize: '0.55rem', minWidth: 14, height: 14, lineHeight: '14px', padding: '0 4px' } }}
+                                                    >
+                                                        <PersonIcon sx={{ color: 'text.secondary', fontSize: 14 }} />
+                                                    </Badge>
+                                                ) : null}
+                                            </Box>
+                                        }
                                     />
                                 </Box>
                         </Box>
@@ -838,7 +937,17 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
             
             {/* Email modal removed — sending occurs immediately when the button is clicked. */}
 
-            {/* Snackbars removed from this component; important events are logged to the console. */}
+            {/* Snackbar for user feedback (toasts) */}
+            <Snackbar
+                open={snackbarOpen}
+                autoHideDuration={snackbarDuration}
+                anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+                onClose={() => setSnackbarOpen(false)}
+            >
+                <Alert onClose={() => setSnackbarOpen(false)} severity={snackbarSeverity} sx={{ width: '100%' }}>
+                    {snackbarMessage}
+                </Alert>
+            </Snackbar>
         </Box>
     );
 };

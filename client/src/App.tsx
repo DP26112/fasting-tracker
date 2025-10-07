@@ -66,6 +66,24 @@ const darkTheme = createTheme({
 const App: React.FC = () => {
     // 🔑 AUTHENTICATION LOGIC
     const { isAuthenticated, logout } = useAuthStore();
+    const initializeAuth = useAuthStore(state => state.initializeAuth);
+
+    // local initializing flag so app doesn't flash guest content while verifying token
+    const [initializing, setInitializing] = React.useState(true);
+
+    React.useEffect(() => {
+        let mounted = true;
+        (async () => {
+            try {
+                await initializeAuth();
+            } catch (e) {
+                // ignore
+            } finally {
+                if (mounted) setInitializing(false);
+            }
+        })();
+        return () => { mounted = false; };
+    }, [initializeAuth]);
 
     // State to force FastHistory refresh after a fast is logged
     const [historyKey, setHistoryKey] = useState(0); 
@@ -134,7 +152,9 @@ const App: React.FC = () => {
                 <Header />
 
                 {/* 🔑 CONDITIONAL RENDERING */}
-                {isAuthenticated ? (
+                {initializing ? (
+                    <Typography variant="body1" color="text.secondary">Loading…</Typography>
+                ) : isAuthenticated ? (
                     <AuthenticatedContent />
                 ) : (
                     <Login />

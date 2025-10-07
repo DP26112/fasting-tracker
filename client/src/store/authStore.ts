@@ -75,10 +75,26 @@ export const useAuthStore = create<AuthStore>((set, get) => {
     // Optional: initialize on app start (can be called from App or main)
     initializeAuth: async () => {
       const token = localStorage.getItem('token');
-      if (!token) return;
+      if (!token) {
+        set({ token: null, isAuthenticated: false });
+        return;
+      }
 
-      // Optionally verify token with server; keep it simple for now and mark authenticated
-      set({ token, isAuthenticated: true });
+      // Verify token by calling the server /auth/me endpoint
+      try {
+        const resp = await axios.get(`${API_BASE}/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+        const user = resp.data?.user ?? null;
+        if (user) {
+          set({ token, user, isAuthenticated: true });
+          return;
+        }
+      } catch (err) {
+        // invalid token or server unreachable — clear local token
+        console.warn('initializeAuth: token verify failed, clearing local token');
+        localStorage.removeItem('token');
+        set({ token: null, user: null, isAuthenticated: false });
+        return;
+      }
     },
   };
 });

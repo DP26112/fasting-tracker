@@ -55,13 +55,27 @@ const EMAIL_USER = process.env.EMAIL_USER;  
 const EMAIL_PASS = process.env.EMAIL_PASS;  
 
 // Configure the Nodemailer Transporter
-const transporter = nodemailer.createTransport({
-    service: 'gmail', 
-    auth: {
-        user: EMAIL_USER,
-        pass: EMAIL_PASS 
-    }
-});
+// In test mode we provide a no-op transporter to avoid sending real email.
+let transporter;
+if (process.env.NODE_ENV === 'test') {
+    transporter = {
+        sendMail: async (opts) => {
+            try {
+                if (DEBUG_LOGS) console.log('TEST-MODE transporter: sendMail called, to=', opts && opts.to);
+            } catch (e) { /* ignore */ }
+            return Promise.resolve({ messageId: 'test-mode' });
+        },
+        close: () => { /* noop */ }
+    };
+} else {
+    transporter = nodemailer.createTransport({
+        service: 'gmail', 
+        auth: {
+            user: EMAIL_USER,
+            pass: EMAIL_PASS 
+        }
+    });
+}
 // ----------------------------------------
 
 // --- Helper: format dates like frontend: MM/DD/YY | h:mm AM/PM ---
@@ -162,6 +176,20 @@ const requireAuth = (req, res, next) => {
 
 // 🔑 NEW: Mount the Auth Routes
 app.use('/api/auth', authRoutes);
+
+// Simple endpoint to return the authenticated user's info (id + email)
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+    try {
+        const userId = req.user && req.user.id;
+        if (!userId) return res.status(401).json({ message: 'Not authenticated.' });
+        const u = await User.findById(userId).select('email').lean();
+        if (!u) return res.status(404).json({ message: 'User not found.' });
+        return res.status(200).json({ user: { id: String(u._id), email: u.email } });
+    } catch (err) {
+        console.error('GET /api/auth/me error:', err && err.message ? err.message : err);
+        return res.status(500).json({ message: 'Failed to fetch user.' });
+    }
+});
 
 
 // 1. Endpoint to save a completed fast (PROTECTED)
@@ -318,7 +346,118 @@ app.post('/api/send-report', async (req, res) => {
                 }
             }
         }
-        res.status(200).send({ message: 'Email sent successfully!', to: primaryRecipient, bcc: bccList });
+
+        // Persist additional recipients for authenticated users so automation can remember them
+        try {
+            // Attempt to decode an optional Bearer token from Authorization header
+            let optionalUserId = null;
+            let persistedSchedule = null; // will hold the ScheduledReport document if we create/merge one
+            try {
+                const authHeader = (req.headers && req.headers.authorization) ? String(req.headers.authorization) : null;
+                if (authHeader && authHeader.startsWith('Bearer ') && JWT_SECRET) {
+                    const token = authHeader.split(' ')[1];
+                    const decoded = jwt.verify(token, JWT_SECRET);
+                    if (decoded && decoded.id) optionalUserId = decoded.id;
+                }
+            } catch (e) {
+                // ignore token errors — persistence is best-effort
+                if (DEBUG_LOGS) console.warn('send-report: optional token decode failed', e && e.message ? e.message : e);
+            }
+
+            // honor explicit autoEnableSchedule flag from client when present
+            const autoEnable = req.body && req.body.autoEnableSchedule === true;
+            if (optionalUserId && Array.isArray(recipients) && recipients.length > 0 && startTime) {
+                // Normalize recipients (unique, trimmed)
+                const newRecips = Array.from(new Set(recipients.map(r => String(r || '').trim()).filter(Boolean))).slice(0, 50);
+
+                // Try to resolve activeFastId similar to schedule endpoint logic
+                let resolvedActiveFastId = null;
+                if (mongoose.Types.ObjectId.isValid(String(req.body.activeFastId || ''))) {
+                    resolvedActiveFastId = req.body.activeFastId;
+                } else {
+                    const start = new Date(startTime);
+                    if (!isNaN(start.getTime())) {
+                        const rangeStart = new Date(start.getTime() - 60 * 1000);
+                        const rangeEnd = new Date(start.getTime() + 60 * 1000);
+                        const active = await ActiveFast.findOne({ userId: optionalUserId, startTime: { $gte: rangeStart, $lte: rangeEnd } });
+                        if (active) resolvedActiveFastId = active._id;
+                    }
+                }
+
+                // Upsert ScheduledReport record by userId + activeFastId OR userId + startTime (±1m tolerance)
+                const query = resolvedActiveFastId ? { userId: optionalUserId, activeFastId: resolvedActiveFastId } : { userId: optionalUserId, startTime: new Date(startTime) };
+                const existing = await ScheduledReport.findOne(query);
+                if (existing) {
+                    // merge and persist unique recipients
+                    const merged = Array.from(new Set([...(existing.recipients || []), ...newRecips]));
+                    existing.recipients = merged.slice(0, 50);
+                    // If client explicitly asked to enable automation, update the existing schedule accordingly
+                    if (autoEnable) {
+                        try {
+                            existing.enabled = true;
+                            // compute nextSendAt anchored to start if not present
+                            const startDt = new Date(existing.startTime || startTime);
+                            const firstAnchor = new Date(startDt.getTime() + 24 * 60 * 60 * 1000);
+                            const now = new Date();
+                            let nextSendAt;
+                            if (!existing.nextSendAt) {
+                                if (now < firstAnchor) {
+                                    nextSendAt = firstAnchor;
+                                } else {
+                                    const diffMs = now.getTime() - firstAnchor.getTime();
+                                    const intervalsPassed = Math.floor(diffMs / (6 * 60 * 60 * 1000));
+                                    nextSendAt = new Date(firstAnchor.getTime() + (intervalsPassed + 1) * 6 * 60 * 60 * 1000);
+                                }
+                                existing.nextSendAt = nextSendAt;
+                            }
+                            existing.intervalHours = existing.intervalHours || 6;
+                        } catch (e) {
+                            if (DEBUG_LOGS) console.warn('send-report: failed to compute nextSendAt for existing schedule', e && e.message ? e.message : e);
+                        }
+                    }
+                    await existing.save();
+                    persistedSchedule = existing;
+                    if (DEBUG_LOGS) console.log('send-report: merged recipients into ScheduledReport', existing._id, existing.recipients, 'enabled=', existing.enabled);
+                } else {
+                    // create a schedule record. If client explicitly requested auto-enable, enable it and compute nextSendAt
+                    const docObj = { userId: optionalUserId, activeFastId: resolvedActiveFastId || null, startTime: new Date(startTime), recipients: newRecips.slice(0, 50), processing: false };
+                    if (autoEnable) {
+                        // compute nextSendAt anchored to start: first at start+24h, then every 6h after
+                        const startDt = new Date(startTime);
+                        const firstAnchor = new Date(startDt.getTime() + 24 * 60 * 60 * 1000);
+                        const now = new Date();
+                        let nextSendAt;
+                        if (now < firstAnchor) {
+                            nextSendAt = firstAnchor;
+                        } else {
+                            const diffMs = now.getTime() - firstAnchor.getTime();
+                            const intervalsPassed = Math.floor(diffMs / (6 * 60 * 60 * 1000));
+                            nextSendAt = new Date(firstAnchor.getTime() + (intervalsPassed + 1) * 6 * 60 * 60 * 1000);
+                        }
+                        docObj.enabled = true;
+                        docObj.nextSendAt = nextSendAt;
+                        docObj.intervalHours = 6;
+                    } else {
+                        docObj.enabled = false;
+                        docObj.nextSendAt = null;
+                        docObj.intervalHours = 6;
+                    }
+                    const doc = new ScheduledReport(docObj);
+                    await doc.save();
+                    persistedSchedule = doc;
+                    if (DEBUG_LOGS) console.log('send-report: created ScheduledReport to persist recipients', doc._id, doc.recipients, 'enabled=', doc.enabled);
+                }
+            }
+        } catch (persistErr) {
+            console.error('send-report: failed to persist recipients to ScheduledReport', persistErr && persistErr.message ? persistErr.message : persistErr);
+        }
+
+        // Include persisted schedule in response if we successfully saved one
+        const respObj = { message: 'Email sent successfully!', to: primaryRecipient, bcc: bccList };
+        if (typeof persistedSchedule !== 'undefined' && persistedSchedule && persistedSchedule._id) {
+            respObj.schedule = persistedSchedule;
+        }
+        res.status(200).send(respObj);
     } catch (error) {
         console.error('Error sending email:', error && error.message ? error.message : error);
         res.status(500).send({ 
@@ -602,11 +741,12 @@ app.post('/api/schedule-status-report', requireAuth, async (req, res) => {
             return res.status(503).json({ message: 'Database not connected; scheduling unavailable.' });
         }
         const userId = req.user.id;
-        const { activeFastId, startTime, recipients } = req.body;
-        if (!startTime && !activeFastId) return res.status(400).json({ message: 'Missing required fields (startTime or activeFastId).' });
-        if (!recipients) return res.status(400).json({ message: 'Missing recipients.' });
+    const { activeFastId, startTime, recipients } = req.body;
+    if (!startTime && !activeFastId) return res.status(400).json({ message: 'Missing required fields (startTime or activeFastId).' });
 
-        const recList = String(recipients).split(',').map(s => s.trim()).filter(Boolean).slice(0, 10);
+    // Accept optional recipients. If none are supplied, we'll attempt to merge in any
+    // previously-used recipients for this user so enabling automation remembers everyone.
+    const providedRecips = recipients ? String(recipients).split(',').map(s => s.trim()).filter(Boolean) : [];
 
         // Resolve activeFastId: if provided and valid ObjectId, use it; otherwise try to find ActiveFast by userId+startTime
         let resolvedActiveFastId = null;
@@ -647,8 +787,44 @@ app.post('/api/schedule-status-report', requireAuth, async (req, res) => {
         // Upsert by userId + activeFastId
         try {
             const query = resolvedActiveFastId ? { userId, activeFastId: resolvedActiveFastId } : { userId, startTime: start };
-            const setObj = { recipients: recList, startTime: start, nextSendAt, enabled: true, processing: false };
+
+            // Load any existing schedule for this key so we can merge recipients
+            const existingSame = await ScheduledReport.findOne(query).lean();
+
+            // Also gather any other recipients the user has used previously across other schedules
+            const otherSchedules = await ScheduledReport.find({ userId }).select('recipients').lean();
+
+            // Build merged recipient list with the following preference order:
+            // 1) recipients explicitly provided in this request
+            // 2) recipients already present on this exact schedule (existingSame)
+            // 3) recipients used in any other schedule for this user
+            let merged = [];
+            if (Array.isArray(providedRecips) && providedRecips.length > 0) merged.push(...providedRecips);
+            if (existingSame && Array.isArray(existingSame.recipients)) merged.push(...existingSame.recipients);
+            for (const s of otherSchedules || []) {
+                if (s && Array.isArray(s.recipients)) merged.push(...s.recipients);
+            }
+
+            // Normalize: trim, remove blanks, dedupe while preserving first-seen order, and limit
+            const seen = new Set();
+            merged = merged.map(r => String(r || '').trim()).filter(Boolean).filter(r => { if (seen.has(r)) return false; seen.add(r); return true; }).slice(0, 50);
+
+            // If no recipients after merging, default to the authenticated user's email (if available)
+            if (merged.length === 0) {
+                try {
+                    const User = require('./models/User');
+                    const userDoc = await User.findById(userId).select('email').lean();
+                    if (userDoc && userDoc.email) {
+                        merged = [String(userDoc.email).trim()];
+                    }
+                } catch (e) {
+                    console.warn('schedule-status-report: failed to load user email for default recipient', e && e.message ? e.message : e);
+                }
+            }
+
+            const setObj = { recipients: merged, startTime: start, nextSendAt, enabled: true, processing: false };
             if (resolvedActiveFastId) setObj.activeFastId = resolvedActiveFastId; else setObj.activeFastId = null;
+
             const upd = await ScheduledReport.findOneAndUpdate(
                 query,
                 { $set: setObj },
@@ -656,8 +832,8 @@ app.post('/api/schedule-status-report', requireAuth, async (req, res) => {
             );
             return res.status(200).json({ message: 'Scheduled report created/updated.', schedule: upd });
         } catch (validationErr) {
-            console.error('schedule-status-report validation error:', validationErr.message);
-            return res.status(400).json({ message: 'Invalid schedule data.', error: validationErr.message });
+            console.error('schedule-status-report validation error:', validationErr && validationErr.message ? validationErr.message : validationErr);
+            return res.status(400).json({ message: 'Invalid schedule data.', error: validationErr && validationErr.message ? validationErr.message : String(validationErr) });
         }
     } catch (err) {
         console.error('schedule-status-report error:', err.message);
@@ -732,21 +908,28 @@ app.delete('/api/schedule-status-report', requireAuth, async (req, res) => {
             if (active) resolvedActiveFastId = active._id;
         }
 
-        // If we resolved an activeFastId, delete by that; otherwise if startTime was provided delete by userId+startTime
-        if (resolvedActiveFastId) {
-            await ScheduledReport.deleteOne({ userId, activeFastId: resolvedActiveFastId });
-            return res.status(200).json({ message: 'Schedule removed.' });
+        // If we resolved an activeFastId, clear recipients for that schedule and disable it; otherwise if startTime was provided clear by userId+startTime
+        // Purpose: when user toggles automation OFF we want to remove any additional recipients so it is "like no one was ever added"
+        // We'll set recipients to the authenticated user's email (if available) and disable the schedule instead of deleting the record.
+        let userEmail = null;
+        try {
+            const userDoc = await User.findById(userId).select('email').lean();
+            if (userDoc && userDoc.email) userEmail = String(userDoc.email).trim();
+        } catch (e) {
+            console.warn('Failed to load user email while disabling schedule:', e && e.message ? e.message : e);
         }
 
-        if (startTime) {
-            const start = new Date(String(startTime));
-            const rangeStart = new Date(start.getTime() - 60 * 1000);
-            const rangeEnd = new Date(start.getTime() + 60 * 1000);
-            await ScheduledReport.deleteOne({ userId, startTime: { $gte: rangeStart, $lte: rangeEnd } });
-            return res.status(200).json({ message: 'Schedule removed by startTime.' });
-        }
+        const newRecipients = userEmail ? [userEmail] : [];
 
-        return res.status(404).json({ message: 'Active fast not found for user.' });
+        // Clear recipients for all schedules belonging to this user. This prevents recipients from
+        // reappearing via merging from other schedules when the user re-enables automation.
+        try {
+            const updateResult = await ScheduledReport.updateMany({ userId }, { $set: { recipients: newRecipients, enabled: false } });
+            return res.status(200).json({ message: 'Schedules disabled and recipients cleared for user.', matched: updateResult.matchedCount, modified: updateResult.modifiedCount });
+        } catch (e) {
+            console.error('Failed to clear schedules for user:', e && e.message ? e.message : e);
+            return res.status(500).json({ message: 'Failed to disable schedules for user.', error: e && e.message ? e.message : String(e) });
+        }
     } catch (err) {
         console.error('DELETE schedule-status-report error:', err.message);
         return res.status(500).json({ message: 'Server error deleting schedule.', error: err.message });
@@ -812,7 +995,20 @@ async function processDueSchedules() {
                     };
 
                     // Determine primary recipient + BCC list (mirror /api/send-report behavior)
-                    const recArr = payload.recipients || [];
+                    let recArr = payload.recipients || [];
+                    // Normalize: ensure array, trim whitespace, remove empties, and deduplicate while preserving order
+                    if (!Array.isArray(recArr)) recArr = String(recArr || '').split(',');
+                    recArr = recArr.map(r => String(r || '').trim()).filter(Boolean);
+                    const seen = new Set();
+                    recArr = recArr.filter(r => { if (seen.has(r)) return false; seen.add(r); return true; });
+
+                    // Persist normalized recipients back onto the ScheduledReport so the DB stays consistent
+                    try {
+                        await ScheduledReport.findByIdAndUpdate(claimed._id, { $set: { recipients: recArr } });
+                    } catch (persistErr) {
+                        console.warn('Failed to persist normalized recipients for schedule', claimed._id, persistErr && persistErr.message ? persistErr.message : persistErr);
+                    }
+
                     const primaryRecipient = recArr.length > 0 ? recArr[0] : null;
                     const bccList = recArr.length > 1 ? recArr.slice(1) : [];
                     if (!primaryRecipient) {
