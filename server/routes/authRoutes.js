@@ -5,13 +5,20 @@ const jwt = require('jsonwebtoken');
 
 // Ensure you have a JWT_SECRET in your .env file!
 const JWT_SECRET = process.env.JWT_SECRET;
-const JWT_LIFETIME = '7d'; // Token validity
+const ACCESS_TOKEN_LIFETIME = process.env.ACCESS_TOKEN_LIFETIME || '15m';
+const REFRESH_TOKEN_LIFETIME = process.env.REFRESH_TOKEN_LIFETIME || '7d';
 
-// --- Helper: Generate JWT Token ---
-const createToken = (id) => {
-    return jwt.sign({ id }, JWT_SECRET, {
-        expiresIn: JWT_LIFETIME
-    });
+// --- Helpers: Generate tokens ---
+const createAccessToken = (id) => jwt.sign({ id }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_LIFETIME });
+const createRefreshToken = (id) => jwt.sign({ id }, JWT_SECRET, { expiresIn: REFRESH_TOKEN_LIFETIME });
+
+// Cookie options for refresh token (httpOnly, secure in prod)
+const REFRESH_COOKIE_NAME = 'refreshToken';
+const REFRESH_COOKIE_OPTIONS = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 1000 * 60 * 60 * 24 * 7 // default 7 days in ms (can be tuned)
 };
 
 // --- 1. REGISTRATION Route ---
@@ -22,13 +29,22 @@ router.post('/register', async (req, res) => {
         // The password will be hashed automatically by the UserSchema pre-save hook
         const user = await User.create({ email, password });
         
-        // Create token for immediate login
-        const token = createToken(user._id);
+        // Create access + refresh tokens
+        const accessToken = createAccessToken(user._id);
+        const refreshToken = createRefreshToken(user._id);
+
+        // Persist refresh token
+        user.refreshTokens = user.refreshTokens || [];
+        user.refreshTokens.push(refreshToken);
+        await user.save();
+
+        // Set httpOnly refresh cookie
+        res.cookie(REFRESH_COOKIE_NAME, refreshToken, REFRESH_COOKIE_OPTIONS);
 
         res.status(201).json({ 
             message: 'User successfully registered.',
             user: { id: user._id, email: user.email },
-            token 
+            accessToken 
         });
     } catch (error) {
         // Handle common errors (like duplicate email)
@@ -77,22 +93,28 @@ router.post('/login', async (req, res) => {
             return res.status(400).json({ message: 'Invalid credentials.' });
         }
 
-        // Credentials are valid, create a new token
-        const token = createToken(user._id);
+    // Credentials are valid, create access + refresh tokens
+    const accessToken = createAccessToken(user._id);
+    const refreshToken = createRefreshToken(user._id);
 
-        // Update lastLogin timestamp
+        // Persist refresh token and update lastLogin timestamp
         try {
             user.lastLogin = new Date();
+            user.refreshTokens = user.refreshTokens || [];
+            user.refreshTokens.push(refreshToken);
             await user.save();
         } catch (err) {
             console.error('Failed to update lastLogin:', err.message);
             // Not fatal — we still return a successful login
         }
 
+        // Set httpOnly refresh cookie
+        res.cookie(REFRESH_COOKIE_NAME, refreshToken, REFRESH_COOKIE_OPTIONS);
+
         res.status(200).json({
             message: 'Login successful.',
             user: { id: user._id, email: user.email },
-            token
+            accessToken
         });
 
     } catch (error) {
@@ -101,3 +123,54 @@ router.post('/login', async (req, res) => {
 });
 
 module.exports = router;
+
+// --- 3. REFRESH Endpoint ---
+router.post('/refresh', async (req, res) => {
+    const refreshToken = req.cookies && req.cookies[REFRESH_COOKIE_NAME];
+    if (!refreshToken) return res.status(401).json({ message: 'No refresh token provided.' });
+
+    try {
+        const payload = jwt.verify(refreshToken, JWT_SECRET);
+        const userId = payload.id;
+        const user = await User.findById(userId);
+        if (!user) return res.status(401).json({ message: 'Invalid refresh token.' });
+
+        // Check that the refresh token exists in the persisted list
+        if (!user.refreshTokens || !user.refreshTokens.includes(refreshToken)) {
+            return res.status(401).json({ message: 'Refresh token not recognized.' });
+        }
+
+        // Optionally rotate refresh token: create new refresh token and replace
+        const newRefreshToken = createRefreshToken(userId);
+        user.refreshTokens = (user.refreshTokens || []).filter(t => t !== refreshToken);
+        user.refreshTokens.push(newRefreshToken);
+        await user.save();
+
+        // Set new cookie and issue new access token
+        res.cookie(REFRESH_COOKIE_NAME, newRefreshToken, REFRESH_COOKIE_OPTIONS);
+        const accessToken = createAccessToken(userId);
+        return res.status(200).json({ accessToken });
+    } catch (err) {
+        console.error('Refresh token error:', err && err.message ? err.message : err);
+        return res.status(401).json({ message: 'Invalid or expired refresh token.' });
+    }
+});
+
+// --- 4. LOGOUT Endpoint ---
+router.post('/logout', async (req, res) => {
+    const refreshToken = req.cookies && req.cookies[REFRESH_COOKIE_NAME];
+    if (refreshToken) {
+        try {
+            const payload = jwt.verify(refreshToken, JWT_SECRET);
+            const user = await User.findById(payload.id);
+            if (user && user.refreshTokens) {
+                user.refreshTokens = user.refreshTokens.filter(t => t !== refreshToken);
+                await user.save();
+            }
+        } catch (err) {
+            // ignore — we'll still clear cookie
+        }
+    }
+    res.clearCookie(REFRESH_COOKIE_NAME);
+    return res.status(200).json({ message: 'Logged out.' });
+});

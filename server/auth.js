@@ -4,8 +4,8 @@ const jwt = require('jsonwebtoken');
 
 // Middleware function to check for a valid JWT token
 const auth = (req, res, next) => {
-    // 1. Check for token in the HTTP-only cookie
-    const token = req.cookies.token;
+    // 1. Check for token in the HTTP-only refresh cookie
+    const token = req.cookies && (req.cookies.refreshToken || req.cookies.token);
 
     // 2. If no token is found, unauthorized access
     if (!token) {
@@ -17,9 +17,9 @@ const auth = (req, res, next) => {
         // 3. Verify the token using the JWT_SECRET
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-        // 4. Attach the decoded user payload to the request object
-        // The payload is structured as: { user: { id: '...' } }
-        req.user = decoded.user;
+    // 4. Attach the decoded user payload to the request object
+    // The payload structure is { id: '...' }
+    req.user = { id: decoded.id };
         
         // 5. Proceed to the next middleware or route handler
         next();

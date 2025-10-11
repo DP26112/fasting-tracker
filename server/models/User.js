@@ -27,6 +27,11 @@ const UserSchema = new mongoose.Schema({
         type: Date,
         default: null,
     },
+    // Persist refresh tokens for rotation / revocation support
+    refreshTokens: {
+        type: [String],
+        default: []
+    },
 });
 
 // Middleware to hash the password before saving (Runs only if password is new or modified)

@@ -32,8 +32,8 @@ export const useAuthStore = create<AuthStore>((set, get) => {
 
   return {
     user: null,
-    token: localStorage.getItem('token'),
-    isAuthenticated: !!localStorage.getItem('token'),
+  token: localStorage.getItem('token'),
+  isAuthenticated: false, // will be set after initializeAuth verifies or refreshes
     isLoading: false,
     authError: null,
 
@@ -74,27 +74,28 @@ export const useAuthStore = create<AuthStore>((set, get) => {
 
     // Optional: initialize on app start (can be called from App or main)
     initializeAuth: async () => {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        set({ token: null, isAuthenticated: false });
-        return;
-      }
-
-      // Verify token by calling the server /auth/me endpoint
+      // Attempt to obtain an access token using httpOnly refresh cookie via /auth/refresh
       try {
-        const resp = await axios.get(`${API_BASE}/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
-        const user = resp.data?.user ?? null;
-        if (user) {
-          set({ token, user, isAuthenticated: true });
-          return;
+        const resp = await axios.post(`${API_BASE}/auth/refresh`, {}, { withCredentials: true });
+        const accessToken = resp.data?.accessToken || null;
+        if (accessToken) {
+          // Optionally we can fetch /auth/me for user info
+          try {
+            const me = await axios.get(`${API_BASE}/auth/me`, { headers: { Authorization: `Bearer ${accessToken}` } });
+            const user = me.data?.user ?? null;
+            set({ token: accessToken, user, isAuthenticated: true });
+            return;
+          } catch (meErr) {
+            // If /auth/me fails, still set token so subsequent calls can use it
+            set({ token: accessToken, isAuthenticated: true });
+            return;
+          }
         }
       } catch (err) {
-        // invalid token or server unreachable — clear local token
-        console.warn('initializeAuth: token verify failed, clearing local token');
-        localStorage.removeItem('token');
-        set({ token: null, user: null, isAuthenticated: false });
-        return;
+        // No refresh cookie or refresh failed
+        console.warn('initializeAuth: refresh failed or not present; remaining logged out');
       }
+      set({ token: null, user: null, isAuthenticated: false });
     },
   };
 });

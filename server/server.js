@@ -14,6 +14,7 @@ if (dotenvResult.error) {
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const cookieParser = require('cookie-parser');
 const nodemailer = require('nodemailer');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken'); // 🔑 NEW: Require JWT for middleware
@@ -35,6 +36,8 @@ const DEBUG_LOGS = process.env.DEBUG_LOGS === 'true';
 
 // --- AUTH CONFIG ---
 const JWT_SECRET = process.env.JWT_SECRET;
+const ACCESS_TOKEN_LIFETIME = process.env.ACCESS_TOKEN_LIFETIME || '15m';
+const REFRESH_TOKEN_LIFETIME = process.env.REFRESH_TOKEN_LIFETIME || '7d';
 // -------------------
 
 // --- DATABASE CONNECTION (Using .env) ---
@@ -108,9 +111,11 @@ function formatHourValue(val) {
 
 // --- Middleware ---
 app.use(cors({
-    origin: 'http://localhost:5173' 
+    origin: 'http://localhost:5173',
+    credentials: true,
 }));
 app.use(bodyParser.json());
+app.use(cookieParser());
 
 // Simple request logger to help debug route issues
 app.use((req, res, next) => {
@@ -150,22 +155,26 @@ app.get('/api/ready', (req, res) => {
 
 // 🔑 NEW: JWT Authentication Middleware
 const requireAuth = (req, res, next) => {
-    const authHeader = req.headers.authorization;
+    const authHeader = req.headers && req.headers.authorization;
+    const cookieToken = req.cookies && req.cookies.token;
 
     // Debug: log whether an Authorization header was provided and whether JWT_SECRET is configured
-    try { if (DEBUG_LOGS) console.log(`requireAuth: header present=${!!authHeader}, jwtSecretSet=${!!JWT_SECRET}, path=${req.method} ${req.originalUrl}`); } catch (e) { /* ignore */ }
+    try { if (DEBUG_LOGS) console.log(`requireAuth: header present=${!!authHeader}, cookieToken=${!!cookieToken}, jwtSecretSet=${!!JWT_SECRET}, path=${req.method} ${req.originalUrl}`); } catch (e) { /* ignore */ }
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        // If no token is provided, access is denied
-        console.warn('requireAuth: missing or malformed Authorization header for', req.method, req.originalUrl);
+    let token = null;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.split(' ')[1];
+    } else if (cookieToken) {
+        token = cookieToken;
+    }
+
+    if (!token) {
+        console.warn('requireAuth: missing token for', req.method, req.originalUrl);
         return res.status(401).json({ message: 'Access denied. No token provided.' });
     }
 
-    const token = authHeader.split(' ')[1]; // Extract token from "Bearer <token>"
-
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
-        // Attach the user ID to the request object
         req.user = { id: decoded.id };
         next();
     } catch (err) {
