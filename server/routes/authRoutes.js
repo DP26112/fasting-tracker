@@ -44,7 +44,9 @@ router.post('/register', async (req, res) => {
         res.status(201).json({ 
             message: 'User successfully registered.',
             user: { id: user._id, email: user.email },
-            accessToken 
+            accessToken,
+            // Provide legacy `token` key for clients/tests that expect `token`
+            token: accessToken
         });
     } catch (error) {
         // Handle common errors (like duplicate email)
@@ -114,7 +116,9 @@ router.post('/login', async (req, res) => {
         res.status(200).json({
             message: 'Login successful.',
             user: { id: user._id, email: user.email },
-            accessToken
+            accessToken,
+            // Provide legacy `token` key for clients/tests that expect `token`
+            token: accessToken
         });
 
     } catch (error) {
