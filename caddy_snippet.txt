@@ -1,0 +1,13 @@
+fasting.davorinpiljic.com {
+    reverse_proxy fasting_app:8080 {
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
+        header_up Host {host}
+    }
+}
+
+# Notes:
+# - This config assumes Caddy is running with Docker and the default network is
+#   available (docker-compose uses the external network `caddy_default`).
+# - Place this block in your Caddyfile or include it via a separate file. Caddy
+#   will obtain/manage TLS certificates automatically for this site.

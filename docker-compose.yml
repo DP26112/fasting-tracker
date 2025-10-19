@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  fasting_app:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    image: fasting-tracker:latest
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - PORT=8080
+      - MONGO_URI=${MONGO_URI}
+      - JWT_SECRET=${JWT_SECRET}
+      - EMAIL_USER=${EMAIL_USER}
+      - EMAIL_PASS=${EMAIL_PASS}
+    ports:
+      - "8080:8080"
+    networks:
+      - fasting_net
+      - caddy_default
+
+networks:
+  fasting_net:
+    driver: bridge
+  caddy_default:
+    external: true
+
+# Notes:
+# - Ensure you set environment variables in an env file or your host environment
+#   (MONGO_URI, JWT_SECRET, EMAIL_USER, EMAIL_PASS). Do NOT commit secrets to git.
+# - The client build must exist at client/dist; Dockerfile.server copies that into the image.

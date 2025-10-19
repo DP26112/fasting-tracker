@@ -23,7 +23,7 @@ type AuthStore = {
   initializeAuth: () => Promise<void> | void;
 };
 
-const API_BASE = 'http://localhost:3001/api';
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 export const useAuthStore = create<AuthStore>((set, get) => {
   // call get() once to avoid unused-parameter errors; harmless read

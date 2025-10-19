@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import axios from 'axios';
 import type { Note, FastType } from '../types'; // Import your types
 
-const API_URL = 'http://localhost:3001/api';
+const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 interface ActiveFastState {
     isFasting: boolean;

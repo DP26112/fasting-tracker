@@ -3,7 +3,7 @@ import { Box, Button, TextField, Typography, Alert, CircularProgress } from '@mu
 import axios from 'axios';
 import { useAuthStore } from '../store/authStore'; 
 
-const API_URL = 'http://localhost:3001/api/auth';
+const API_URL = (import.meta.env.VITE_API_URL || '/api') + '/auth';
 
 interface RegisterProps {
     onSuccess: () => void; // Callback to switch back to login/authenticated view

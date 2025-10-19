@@ -1,0 +1,43 @@
+# Dockerfile.server
+# Multi-stage image for the Express server. This image installs server dependencies
+# in a builder stage and produces a small production runner image. The client
+# production build (client/dist) is copied into the final image so the server
+# can serve static assets from /usr/src/app/client/dist.
+
+FROM node:20-alpine AS builder
+WORKDIR /usr/src/app/server
+
+# Install production dependencies only
+COPY server/package*.json ./
+RUN npm ci --only=production
+
+# Copy server source
+COPY server/ ./
+
+## Final image
+FROM node:20-alpine AS runner
+WORKDIR /usr/src/app/server
+
+# Create an unprivileged user
+RUN addgroup -S app && adduser -S app -G app
+
+# Set production environment variable by default (can be overridden by docker-compose)
+ENV NODE_ENV=production
+
+# Copy installed node_modules and server sources from builder
+COPY --from=builder /usr/src/app/server/node_modules ./node_modules
+COPY --from=builder /usr/src/app/server ./
+
+# Copy the client production build into the image so Express can serve it
+# We copy into /usr/src/app/client/dist because server/server.js resolves
+# the static path as path.resolve(__dirname, '../client/dist')
+COPY client/dist /usr/src/app/client/dist
+
+# Default port (overridable via ENV)
+ENV PORT=8080
+EXPOSE 8080
+
+# Run as non-root user
+USER app
+
+CMD ["node", "server.js"]

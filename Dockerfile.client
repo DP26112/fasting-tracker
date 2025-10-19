@@ -1,0 +1,19 @@
+# Dockerfile.client
+# This is a multi-stage Dockerfile that builds the client app using Node and Vite.
+# The final stage intentionally does not create a separate runtime image because the
+# server container will serve the static assets. Use this Dockerfile locally if you
+# want to produce a standalone image for static hosting (e.g., nginx).
+
+FROM node:20-alpine AS builder
+WORKDIR /usr/src/app/client
+
+# Install deps and build
+COPY client/package*.json ./
+RUN npm ci
+COPY client/ ./
+RUN npm run build
+
+# NOTE: The final stage is intentionally omitted because the server build will
+# copy the produced 'dist' directory into the server image for a single-container
+# deployment. If you prefer a standalone client image, add a runtime stage (nginx)
+# to serve /dist.

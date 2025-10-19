@@ -6,7 +6,7 @@ import axios from 'axios';
 // 🔑 CRITICAL: Set this once globally to send HTTP-only cookies
 axios.defaults.withCredentials = true;
 
-const API_URL = 'http://localhost:3001/api';
+const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 interface AuthState {
     userId: string | null;

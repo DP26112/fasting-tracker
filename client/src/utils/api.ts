@@ -5,7 +5,7 @@ import { useAuthStore } from '../store/authStore';
 
 // Create a configured Axios instance
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3001/api', // Adjust base URL as needed
+  baseURL: import.meta.env.VITE_API_URL || '/api', // Use relative path for production
   // Note: Your error logs suggest the base path is /api/ which is handled below.
 });
 

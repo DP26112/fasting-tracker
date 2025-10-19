@@ -28,7 +28,7 @@ const ActiveFast = require('./models/ActiveFast');
 const ScheduledReport = require('./models/ScheduledReport');
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 // Debug flag to gate verbose dev logs (set DEBUG_LOGS=true to enable)
 const DEBUG_LOGS = process.env.DEBUG_LOGS === 'true';
@@ -93,10 +93,20 @@ function formatHourValue(val) {
 
 
 // --- Middleware ---
+const allowedOrigins = process.env.NODE_ENV === 'production' 
+    ? ['https://fasting.davorinpiljic.com'] 
+    : ['http://localhost:5173', 'http://localhost:3000'];
+
 app.use(cors({
-    origin: 'http://localhost:5173' 
+    origin: allowedOrigins,
+    credentials: true
 }));
 app.use(bodyParser.json());
+
+// Serve static files in production
+if (process.env.NODE_ENV === 'production') {
+    app.use(express.static(path.resolve(__dirname, '../client/dist')));
+}
 
 // Simple request logger to help debug route issues
 app.use((req, res, next) => {
@@ -987,6 +997,13 @@ app.post('/api/_debug/preview-send', (req, res) => {
         return res.status(500).json({ message: 'Preview failed', error: err.message });
     }
 });
+
+// Catch-all handler for React app in production
+if (process.env.NODE_ENV === 'production') {
+    app.get('*', (req, res) => {
+        res.sendFile(path.resolve(__dirname, '../client/dist/index.html'));
+    });
+}
 
 // 404 handler for unmatched routes — log the path and return a clear 404
 app.use((req, res) => {
