@@ -156,6 +156,8 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
     // Returns true on success (or when running locally for unauthenticated users), false on failure.
     const handleStartFast = async (time: string): Promise<boolean> => {
         setCustomTimeInput('');
+        // Debugging: log authentication state and requested start time
+        console.log('handleStartFast called', { isAuthenticated, time, userId: user?.id, token: localStorage.getItem('token') });
 
         // If user is authenticated, persist to server first and only update UI on success
         if (isAuthenticated) {
