@@ -1,10 +1,23 @@
 # Dockerfile.server
-# Multi-stage image for the Express server. This image installs server dependencies
-# in a builder stage and produces a small production runner image. The client
-# production build (client/dist) is copied into the final image so the server
-# can serve static assets from /usr/src/app/client/dist.
+# Multi-stage image that builds both client and server, then serves them together.
+# Stage 1: Build the React frontend
+# Stage 2: Install server dependencies
+# Stage 3: Final runtime image with both frontend and backend
 
-FROM node:20-alpine AS builder
+# Stage 1: Build Frontend
+FROM node:20-alpine AS client-builder
+WORKDIR /usr/src/app/client
+
+# Copy client package files and install dependencies
+COPY client/package*.json ./
+RUN npm ci
+
+# Copy client source and build
+COPY client/ ./
+RUN npm run build || ./node_modules/.bin/vite build
+
+# Stage 2: Build Server
+FROM node:20-alpine AS server-builder
 WORKDIR /usr/src/app/server
 
 # Install production dependencies only
@@ -14,7 +27,7 @@ RUN npm ci --only=production
 # Copy server source
 COPY server/ ./
 
-## Final image
+# Stage 3: Final Runtime Image
 FROM node:20-alpine AS runner
 WORKDIR /usr/src/app/server
 
@@ -24,14 +37,14 @@ RUN addgroup -S app && adduser -S app -G app
 # Set production environment variable by default (can be overridden by docker-compose)
 ENV NODE_ENV=production
 
-# Copy installed node_modules and server sources from builder
-COPY --from=builder /usr/src/app/server/node_modules ./node_modules
-COPY --from=builder /usr/src/app/server ./
+# Copy installed node_modules and server sources from server-builder
+COPY --from=server-builder /usr/src/app/server/node_modules ./node_modules
+COPY --from=server-builder /usr/src/app/server ./
 
-# Copy the client production build into the image so Express can serve it
+# Copy the client production build from client-builder stage
 # We copy into /usr/src/app/client/dist because server/server.js resolves
 # the static path as path.resolve(__dirname, '../client/dist')
-COPY client/dist /usr/src/app/client/dist
+COPY --from=client-builder /usr/src/app/client/dist /usr/src/app/client/dist
 
 # Default port (overridable via ENV)
 ENV PORT=8080
