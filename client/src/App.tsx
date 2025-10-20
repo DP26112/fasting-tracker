@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
     Container, Typography, Box, 
     CssBaseline, createTheme, ThemeProvider,
@@ -9,6 +9,7 @@ import FastHistory from './components/FastHistory';
 import FastingTimer from './components/FastingTimer'; 
 import Login from './components/Login'; // 🔑 Import the new Login component
 import { useAuthStore } from './store/authStore'; // 🔑 Import the authentication store
+import { useActiveFastStore } from './store/useActiveFastStore'; // Import active fast store
 
 // --- MUI Dark Theme Setup ---
 const darkTheme = createTheme({
@@ -66,9 +67,19 @@ const darkTheme = createTheme({
 const App: React.FC = () => {
     // 🔑 AUTHENTICATION LOGIC
     const { isAuthenticated, logout } = useAuthStore();
+    const { loadActiveFast } = useActiveFastStore();
 
     // State to force FastHistory refresh after a fast is logged
     const [historyKey, setHistoryKey] = useState(0); 
+
+    // Load active fast from server when user is authenticated
+    useEffect(() => {
+        if (isAuthenticated) {
+            loadActiveFast().catch(err => {
+                console.error('Failed to load active fast on app init:', err);
+            });
+        }
+    }, [isAuthenticated, loadActiveFast]);
 
     const handleFastLogged = () => {
         setHistoryKey(prevKey => prevKey + 1);
