@@ -152,29 +152,44 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
 
     // --- Action Handlers ---
 
-    const handleStartFast = (time: string) => {
+    // Start a fast and persist it to server when authenticated.
+    // Returns true on success (or when running locally for unauthenticated users), false on failure.
+    const handleStartFast = async (time: string): Promise<boolean> => {
+        setCustomTimeInput('');
+
+        // If user is authenticated, persist to server first and only update UI on success
+        if (isAuthenticated) {
+            try {
+                const resp = await api.post('/active-fast', { startTime: time, fastType, notes: [] });
+                // server responded OK — update client state
+                setStartTime(time);
+                setIsFasting(true);
+                setNotes([]);
+                return true;
+            } catch (err) {
+                console.error('Failed to persist active fast to server:', err);
+                // do not update UI state so user sees the failure; fall back to local-only behavior if desired
+                return false;
+            }
+        }
+
+        // Unauthenticated users: persist only locally
         setStartTime(time);
         setIsFasting(true);
         setNotes([]);
-        setCustomTimeInput('');
-        // Persist active fast to server if authenticated
-        (async () => {
-            if (!isAuthenticated) return;
-            try {
-                await api.post('/active-fast', { startTime: time, fastType, notes: [] });
-            } catch (err) {
-                console.error('Failed to persist active fast to server:', err);
-                // ignore; local storage still keeps the active timer
-            }
-        })();
+        return true;
     };
 
-    const handleStartNow = () => {
-        handleStartFast(new Date().toISOString());
-        setShowCustomTime(false);
+    const handleStartNow = async () => {
+        const ok = await handleStartFast(new Date().toISOString());
+        if (ok) setShowCustomTime(false);
+        else {
+            // optionally notify the user; currently we log to console
+            console.error('Start fast failed — please try again or check your network/credentials.');
+        }
     };
 
-    const handleSetCustomTime = () => {
+    const handleSetCustomTime = async () => {
         try {
             if (!customTimeInput) {
                 console.info('ℹ️ Please enter a custom date/time.');
@@ -193,8 +208,9 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                 return;
             }
 
-            handleStartFast(date.toISOString());
-            setShowCustomTime(false);
+            const ok = await handleStartFast(date.toISOString());
+            if (ok) setShowCustomTime(false);
+            else console.error('Failed to set custom start time on server.');
         } catch (e) {
             console.error('❌ Error processing custom date/time input.');
         }
