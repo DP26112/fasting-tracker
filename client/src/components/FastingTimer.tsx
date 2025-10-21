@@ -162,7 +162,14 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
         // If user is authenticated, persist to server first and only update UI on success
         if (isAuthenticated) {
             try {
-                const resp = await api.post('/active-fast', { startTime: time, fastType, notes: [] });
+                const tokenToSend = localStorage.getItem('token');
+                console.log('handleStartFast: sending token (length):', tokenToSend ? tokenToSend.length : null);
+                // Explicitly include Authorization header to avoid relying solely on interceptor
+                await api.post(
+                    '/active-fast',
+                    { startTime: time, fastType, notes: [] },
+                    { headers: { Authorization: tokenToSend ? `Bearer ${tokenToSend}` : undefined } }
+                );
                 // server responded OK — update client state
                 setStartTime(time);
                 setIsFasting(true);
