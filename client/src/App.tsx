@@ -81,6 +81,17 @@ const App: React.FC = () => {
         }
     }, [isAuthenticated, loadActiveFast]);
 
+    // Initialize auth store from localStorage token on app mount
+    useEffect(() => {
+        try {
+            useAuthStore.getState().initializeAuth();
+            // debug log
+            console.log('Auth initializer ran, token exists:', !!localStorage.getItem('token'));
+        } catch (err) {
+            console.error('Failed to initialize auth from token', err);
+        }
+    }, []);
+
     const handleFastLogged = () => {
         setHistoryKey(prevKey => prevKey + 1);
     };
