@@ -50,7 +50,16 @@ COPY --from=client-builder /usr/src/app/client/dist /usr/src/app/client/dist
 ENV PORT=8080
 EXPOSE 8080
 
+# Copy entrypoint and ensure it's executable
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Install busybox-extras to get ntpd (best-effort time sync)
+USER root
+RUN apk add --no-cache busybox-extras || true
+
 # Run as non-root user
 USER app
 
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["node", "server.js"]

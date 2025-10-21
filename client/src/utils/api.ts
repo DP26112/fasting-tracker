@@ -4,9 +4,10 @@ import axios, { AxiosError } from 'axios';
 import { useAuthStore } from '../store/authStore';
 
 // Create a configured Axios instance
+// NOTE: For production deployments we hardcode the official API domain to
+// avoid any mismatch with proxying or environment loading.
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '/api', // Use relative path for production
-  // Note: Your error logs suggest the base path is /api/ which is handled below.
+  baseURL: 'https://fasting.davorinpiljic.com/api',
 });
 
 // Interceptor to attach the JWT token to every request
