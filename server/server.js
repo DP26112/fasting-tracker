@@ -29,7 +29,7 @@ const ActiveFast = require('./models/ActiveFast');
 const ScheduledReport = require('./models/ScheduledReport');
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 8080;
 
 // Debug flag to gate verbose dev logs (set DEBUG_LOGS=true to enable)
 const DEBUG_LOGS = process.env.DEBUG_LOGS === 'true';
@@ -1193,9 +1193,24 @@ app.post('/api/_debug/preview-send', (req, res) => {
     }
 });
 
-// 404 handler for unmatched routes — log the path and return a clear 404
-app.use((req, res) => {
-    console.warn(`404 - No route matched for ${req.method} ${req.originalUrl}`);
+// Serve static files from the React app build
+// This MUST come after all API routes but before the 404 handler
+const clientDistPath = path.join(__dirname, '..', 'client', 'dist');
+console.log('Serving static files from:', clientDistPath);
+app.use(express.static(clientDistPath));
+
+// Serve index.html for all non-API routes (SPA fallback)
+app.get('*', (req, res) => {
+    // Don't serve index.html for API routes or if the request path looks like an API call
+    if (req.path.startsWith('/api/')) {
+        return res.status(404).json({ message: `Not Found: ${req.originalUrl}` });
+    }
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+});
+
+// 404 handler for API routes that weren't matched
+app.use('/api/*', (req, res) => {
+    console.warn(`404 - No API route matched for ${req.method} ${req.originalUrl}`);
     res.status(404).json({ message: `Not Found: ${req.originalUrl}` });
 });
 
