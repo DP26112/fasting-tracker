@@ -8,6 +8,7 @@ import {
 import FastHistory from './components/FastHistory'; 
 import FastingTimer from './components/FastingTimer'; 
 import Login from './components/Login'; // 🔑 Import the new Login component
+import DebugPanel from './components/DebugPanel'; // 🔧 Import debug panel for troubleshooting
 import { useAuthStore } from './store/authStore'; // 🔑 Import the authentication store
 import { useActiveFastStore } from './store/useActiveFastStore'; // Import active fast store
 
@@ -66,35 +67,79 @@ const darkTheme = createTheme({
 // --- Main App Component Start ---
 const App: React.FC = () => {
     // 🔑 AUTHENTICATION LOGIC
-    const { isAuthenticated, logout } = useAuthStore();
+    const { isAuthenticated, isLoading, logout } = useAuthStore();
     const { loadActiveFast } = useActiveFastStore();
 
     // State to force FastHistory refresh after a fast is logged
     const [historyKey, setHistoryKey] = useState(0); 
 
     // Load active fast from server when user is authenticated
+    // Clear active fast when user logs out
     useEffect(() => {
         if (isAuthenticated) {
+            console.log('📥 User authenticated - loading active fast...');
             loadActiveFast().catch(err => {
                 console.error('Failed to load active fast on app init:', err);
+            });
+        } else {
+            // User logged out - clear the active fast store
+            console.log('🧹 User logged out - clearing active fast store');
+            useActiveFastStore.getState().resetFast().catch(err => {
+                console.error('Failed to clear active fast on logout:', err);
             });
         }
     }, [isAuthenticated, loadActiveFast]);
 
     // Initialize auth store from localStorage token on app mount
+    // This MUST complete before rendering the main app
     useEffect(() => {
-        try {
-            useAuthStore.getState().initializeAuth();
-            // debug log
-            console.log('Auth initializer ran, token exists:', !!localStorage.getItem('token'));
-        } catch (err) {
-            console.error('Failed to initialize auth from token', err);
-        }
+        const initAuth = async () => {
+            try {
+                console.log('🚀 App mounted - initializing authentication...');
+                await useAuthStore.getState().initializeAuth();
+                console.log('✅ Authentication initialized successfully');
+            } catch (err) {
+                console.error('❌ Failed to initialize auth from token', err);
+            }
+        };
+        
+        initAuth();
     }, []);
 
     const handleFastLogged = () => {
         setHistoryKey(prevKey => prevKey + 1);
     };
+    
+    // 🛑 CRITICAL: Block rendering until auth initialization is complete
+    // This prevents the race condition on mobile browsers
+    if (isLoading) {
+        return (
+            <ThemeProvider theme={darkTheme}>
+                <CssBaseline />
+                <Container 
+                    maxWidth="md" 
+                    sx={{ 
+                        py: 4,
+                        mx: 'auto', 
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        minHeight: '100vh'
+                    }}
+                >
+                    <Box sx={{ textAlign: 'center' }}>
+                        <Typography variant="h5" color="primary" gutterBottom>
+                            Loading...
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            Initializing authentication
+                        </Typography>
+                    </Box>
+                </Container>
+            </ThemeProvider>
+        );
+    }
     
     // Header Content (shared between authenticated and unauthenticated views)
     const Header = () => (
@@ -163,6 +208,9 @@ const App: React.FC = () => {
                 )}
                 
             </Container>
+            
+            {/* 🔧 Debug panel - enable by adding ?debug=true to URL */}
+            <DebugPanel />
         </ThemeProvider>
     );
 };
