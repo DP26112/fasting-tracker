@@ -78,13 +78,13 @@ const App: React.FC = () => {
     useEffect(() => {
         if (isAuthenticated) {
             console.log('📥 User authenticated - loading active fast...');
-            loadActiveFast().catch(err => {
+            loadActiveFast().catch((err: any) => {
                 console.error('Failed to load active fast on app init:', err);
             });
         } else {
             // User logged out - clear the active fast store
             console.log('🧹 User logged out - clearing active fast store');
-            useActiveFastStore.getState().resetFast().catch(err => {
+            useActiveFastStore.getState().resetFast().catch((err: any) => {
                 console.error('Failed to clear active fast on logout:', err);
             });
         }
