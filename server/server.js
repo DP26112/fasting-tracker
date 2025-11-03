@@ -1006,8 +1006,12 @@ app.post('/api/_debug/preview-send', (req, res) => {
 
 // Catch-all handler for React app in production
 if (process.env.NODE_ENV === 'production') {
-    app.get('/*', (req, res) => {
-        res.sendFile(path.resolve(__dirname, '../client/dist/index.html'));
+    app.use((req, res, next) => {
+        // Only serve index.html for GET requests that aren't API routes
+        if (req.method === 'GET' && !req.path.startsWith('/api')) {
+            return res.sendFile(path.resolve(__dirname, '../client/dist/index.html'));
+        }
+        next();
     });
 }
 
