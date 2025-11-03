@@ -5,9 +5,6 @@ import {
     Accordion,
     AccordionSummary,
     AccordionDetails,
-    List,
-    ListItem,
-    ListItemText,
     Divider,
     IconButton,
 } from '@mui/material';
@@ -98,26 +95,33 @@ const FastHistoryItem: React.FC<FastHistoryItemProps> = React.memo(({ fast, onDe
                                 <Typography variant="subtitle2" color="primary" sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
                                     <Notes sx={{ fontSize: 18, mr: 0.5 }} /> Logged Notes:
                                 </Typography>
-                                <List dense disablePadding>
+                                {/* 🎨 Match Fast Notes styling exactly */}
+                                <Box>
                                     {fast.notes.map((note: Note, index) => {
                                         const noteTime = parseISO(note.time);
                                         
-                                        // 🎨 NEW: Standardized format - mm/dd/yy | h:mm AM/PM @ 0.0h
-                                        const formattedTime = format(noteTime, 'MM/dd/yy');
-                                        const formattedHour = format(noteTime, 'h:mm a');
-                                        const hours = note.fastHours !== undefined ? note.fastHours.toFixed(1) : '0.0';
-                                        const prefix = `${formattedTime} | ${formattedHour} @ ${hours}h`;
-                                            
                                         return (
-                                            <ListItem key={index} disableGutters sx={{ py: 0.5 }}>
-                                                <ListItemText
-                                                    primary={`${prefix} - ${note.text}`}
-                                                    primaryTypographyProps={{ variant: 'body2', color: 'text.primary', fontFamily: 'monospace' }}
-                                                />
-                                            </ListItem>
+                                            <Box
+                                                key={index}
+                                                sx={{
+                                                    mb: 1,
+                                                    pb: 0.5,
+                                                    borderBottom: '1px solid #222',
+                                                }}
+                                            >
+                                                {/* Timestamp - matches Fast Notes exactly */}
+                                                <Typography variant="caption" sx={{ fontWeight: 'bold', color: 'secondary.main', display: 'block', mb: 0.5 }}>
+                                                    {format(noteTime, 'MM/dd/yy')} | {format(noteTime, 'h:mm a')} @ {(note.fastHours ?? 0).toFixed(1)}h
+                                                </Typography>
+                                                
+                                                {/* Note text - matches Fast Notes exactly */}
+                                                <Typography variant="body2">
+                                                    {note.text}
+                                                </Typography>
+                                            </Box>
                                         );
                                     })}
-                                </List>
+                                </Box>
                             </>
                         )}
                     </Box>
