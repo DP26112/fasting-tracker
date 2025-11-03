@@ -71,13 +71,30 @@ if (process.env.NODE_ENV === 'test') {
         close: () => { /* noop */ }
     };
 } else {
+    // Use explicit SMTP configuration instead of 'service: gmail' for better reliability
+    const SMTP_HOST = process.env.SMTP_HOST || 'smtp.gmail.com';
+    const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
+    const EMAIL_USER = process.env.EMAIL_USER;
+    const EMAIL_PASS = process.env.EMAIL_PASS;
+    
     transporter = nodemailer.createTransport({
-        service: 'gmail', 
+        host: SMTP_HOST,
+        port: SMTP_PORT,
+        secure: false, // Use STARTTLS (port 587)
         auth: {
             user: EMAIL_USER,
             pass: EMAIL_PASS 
-        }
+        },
+        tls: {
+            // Don't reject unauthorized certs in development, but enforce in production
+            rejectUnauthorized: process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '0'
+        },
+        connectionTimeout: 10000, // 10 second timeout
+        greetingTimeout: 10000,
+        socketTimeout: 10000
     });
+    
+    console.log(`Nodemailer configured: ${SMTP_HOST}:${SMTP_PORT} (user: ${EMAIL_USER})`);
 }
 // ----------------------------------------
 
