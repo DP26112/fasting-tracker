@@ -718,8 +718,10 @@ app.post('/api/admin/cleanup-active-fasts', requireAuth, async (req, res) => {
 // Get current active fast for the authenticated user
 app.get('/api/active-fast', requireAuth, async (req, res) => {
     const userId = req.user.id;
+    console.log(`[GET /api/active-fast] userId: ${userId}, email: ${req.user.email || 'N/A'}`);
     try {
         const active = await ActiveFast.findOne({ userId });
+        console.log(`[GET /api/active-fast] Found active fast:`, active ? `startTime=${active.startTime}, fastType=${active.fastType}` : 'NULL');
         if (!active) return res.status(404).json({ message: 'No active fast' });
         res.status(200).json({ active });
     } catch (err) {
@@ -732,10 +734,12 @@ app.get('/api/active-fast', requireAuth, async (req, res) => {
 app.post('/api/active-fast', requireAuth, async (req, res) => {
     const userId = req.user.id;
     const { startTime, fastType, notes } = req.body;
+    console.log(`[POST /api/active-fast] userId: ${userId}, email: ${req.user.email || 'N/A'}, startTime: ${startTime}, fastType: ${fastType}`);
     try {
         const update = { startTime, fastType, notes, updatedAt: new Date() };
         const opts = { upsert: true, new: true, setDefaultsOnInsert: true };
         const active = await ActiveFast.findOneAndUpdate({ userId }, update, opts);
+        console.log(`[POST /api/active-fast] Successfully saved active fast for userId: ${userId}`);
         res.status(200).json({ message: 'Active fast updated', active });
     } catch (err) {
         console.error('Error upserting active fast:', err.message);
