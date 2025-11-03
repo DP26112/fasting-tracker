@@ -65,7 +65,10 @@ const transporter = nodemailer.createTransport({
     },
     connectionTimeout: 10000, // 10 seconds
     greetingTimeout: 10000,
-    socketTimeout: 10000
+    socketTimeout: 10000,
+    tls: {
+        rejectUnauthorized: false // Bypass certificate validation for Docker
+    }
 });
 // ----------------------------------------// --- Helper: format dates like frontend: MM/DD/YY | h:mm AM/PM ---
 function pad2(n) { return n < 10 ? '0' + n : '' + n; }
