@@ -1194,20 +1194,19 @@ app.post('/api/_debug/preview-send', (req, res) => {
 });
 
 // Serve static files from the React app build
-// This MUST come after all API routes but before the 404 handler
+// This MUST come after all API routes
 const clientDistPath = path.join(__dirname, '..', 'client', 'dist');
 console.log('Serving static files from:', clientDistPath);
 app.use(express.static(clientDistPath));
 
-// 404 handler for API routes that weren't matched
-app.use('/api', (req, res) => {
-    console.warn(`404 - No API route matched for ${req.method} ${req.originalUrl}`);
-    res.status(404).json({ message: `Not Found: ${req.originalUrl}` });
-});
-
-// Serve index.html for all other routes (SPA fallback)
-// This catches all routes that aren't API or static files
-app.use((req, res) => {
+// Serve index.html for all non-API routes (SPA fallback)
+// This catches all routes that aren't API routes or static files
+app.use((req, res, next) => {
+    // Don't intercept API routes
+    if (req.path.startsWith('/api/')) {
+        return next();
+    }
+    // Serve the React app for all other routes
     res.sendFile(path.join(clientDistPath, 'index.html'));
 });
 
