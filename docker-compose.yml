@@ -7,7 +7,14 @@ services:
       dockerfile: Dockerfile.server
     image: fasting-tracker:latest
     restart: always
-    network_mode: host
+    networks:
+      web_proxy_net:
+        aliases:
+          - fasting_app # This sets the alias you tried to add manually
+      fasting_net:
+    
+    expose: # This line might not be strictly necessary, but it's good practice
+      - "8080" # Exposes the app's port *inside* Docker
     environment:
       - NODE_ENV=production
       - PORT=8080
@@ -22,7 +29,7 @@ services:
 networks:
   fasting_net:
     driver: bridge
-  caddy_default:
+  web_proxy_net:
     external: true
 
 # Notes:
