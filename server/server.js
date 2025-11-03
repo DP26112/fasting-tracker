@@ -45,7 +45,20 @@ const DB_URL = process.env.MONGO_URI; 
 
 if (DB_URL) {
         mongoose.connect(DB_URL)
-            .then(() => console.log('MongoDB Atlas connected successfully! 🚀'))
+            .then(async () => {
+                console.log('MongoDB Atlas connected successfully! 🚀');
+                
+                // ✅ PERFORMANCE: Create indexes for faster queries
+                try {
+                    await User.collection.createIndex({ email: 1 }, { unique: true });
+                    await Fast.collection.createIndex({ userId: 1, endTime: -1 }); // Fast history queries
+                    await ActiveFast.collection.createIndex({ userId: 1 }, { unique: true }); // Active fast lookups
+                    await ScheduledReport.collection.createIndex({ userId: 1 }); // Scheduled report queries
+                    console.log('✅ Database indexes created successfully');
+                } catch (err) {
+                    console.warn('⚠️ Index creation warning (may already exist):', err.message);
+                }
+            })
             .catch(err => console.error('MongoDB connection error:', err));
 } else {
         console.warn('MONGO_URI not set — skipping MongoDB connection. Some routes will be disabled.');

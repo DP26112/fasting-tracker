@@ -24,7 +24,7 @@ services:
       - EMAIL_PASS=abdpripvvcczmzfe
       - SMTP_HOST=smtp.gmail.com
       - SMTP_PORT=587
-      - NODE_TLS_REJECT_UNAUTHORIZED=0
+      # ✅ SECURITY FIX: Removed NODE_TLS_REJECT_UNAUTHORIZED=0 - proper SMTP config handles TLS correctly
 
 networks:
   fasting_net:
