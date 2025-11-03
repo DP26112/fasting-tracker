@@ -2,7 +2,6 @@ import React from 'react';
 import {
     Typography,
     Box,
-    Card,
     Accordion,
     AccordionSummary,
     AccordionDetails,
@@ -24,11 +23,6 @@ interface FastHistoryItemProps {
 }
 
 const FastHistoryItem: React.FC<FastHistoryItemProps> = React.memo(({ fast, onDelete }) => {
-    const formatDuration = (hours: number): string => {
-        const h = Math.floor(hours);
-        const m = Math.round((hours % 1) * 60); 
-        return `${h}h ${m}m`;
-    };
     // Local expansion state to lazy-render details only when expanded
     const [expanded, setExpanded] = React.useState(false);
     const handleChange = React.useCallback((_: React.SyntheticEvent, isExpanded: boolean) => {
@@ -36,11 +30,16 @@ const FastHistoryItem: React.FC<FastHistoryItemProps> = React.memo(({ fast, onDe
     }, []);
     
     return (
-        <Card raised sx={{ mb: 2, background: 'background.paper' }}>
-            {/* 🔑 FINAL FIX: Using TransitionProps, the standard prop for inner transition components in many MUI elements. */}
+        <Box>
+            {/* 🎨 NEW: Remove Card wrapper - use divider between items instead */}
             <Accordion
                 disableGutters
-                sx={{ background: 'transparent' }}
+                elevation={0}
+                sx={{ 
+                    background: 'transparent',
+                    '&:before': { display: 'none' }, // Remove default MUI Accordion divider
+                    mb: 0
+                }}
                 TransitionProps={{ unmountOnExit: true }}
                 expanded={expanded}
                 onChange={handleChange}
@@ -103,15 +102,17 @@ const FastHistoryItem: React.FC<FastHistoryItemProps> = React.memo(({ fast, onDe
                                     {fast.notes.map((note: Note, index) => {
                                         const noteTime = parseISO(note.time);
                                         
-                                        const prefix = note.fastHours !== undefined
-                                            ? `[${formatDuration(note.fastHours)}] ${format(noteTime, 'MMM d, h:mm a')}`
-                                            : `${format(noteTime, 'MMM d, h:mm a')}`;
+                                        // 🎨 NEW: Standardized format - mm/dd/yy | h:mm AM/PM @ 0.0h
+                                        const formattedTime = format(noteTime, 'MM/dd/yy');
+                                        const formattedHour = format(noteTime, 'h:mm a');
+                                        const hours = note.fastHours !== undefined ? note.fastHours.toFixed(1) : '0.0';
+                                        const prefix = `${formattedTime} | ${formattedHour} @ ${hours}h`;
                                             
                                         return (
-                                            <ListItem key={index} disableGutters sx={{ py: 0 }}>
+                                            <ListItem key={index} disableGutters sx={{ py: 0.5 }}>
                                                 <ListItemText
-                                                    primary={`${prefix}: ${note.text}`}
-                                                    primaryTypographyProps={{ variant: 'caption', color: 'text.primary' }}
+                                                    primary={`${prefix} - ${note.text}`}
+                                                    primaryTypographyProps={{ variant: 'body2', color: 'text.primary', fontFamily: 'monospace' }}
                                                 />
                                             </ListItem>
                                         );
@@ -123,7 +124,9 @@ const FastHistoryItem: React.FC<FastHistoryItemProps> = React.memo(({ fast, onDe
                 </AccordionDetails>
                 )}
             </Accordion>
-        </Card>
+            {/* 🎨 NEW: Divider between history items */}
+            <Divider sx={{ my: 2, borderColor: 'rgba(255, 255, 255, 0.1)' }} />
+        </Box>
     );
 });
 

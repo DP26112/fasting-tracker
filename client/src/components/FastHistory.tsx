@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import {
     Typography, Box, CircularProgress, Alert,
     List, Button, TextField, Snackbar,
-    Collapse,
+    Collapse, Paper,
     Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -174,82 +174,88 @@ const FastHistory: React.FC = () => {
 
     return (
         <Box sx={{ mt: 5 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                <Typography variant="h4" color="primary" sx={{ borderBottom: '2px solid', borderColor: 'secondary.main', pb: 1, pr: 2 }}>
-                    <Event sx={{ verticalAlign: 'middle', mr: 1 }} /> Fasting History
-                </Typography>
-
-                <Button
-                    variant="outlined"
-                    onClick={handleToggleHistory}
-                    startIcon={isHistoryVisible ? <ExpandMoreIcon /> : <ChevronRightIcon />}
-                    size="small"
-                    color="secondary"
-                >
-                    {isHistoryVisible ? 'Collapse' : 'Expand'} History
-                </Button>
-            </Box>
-
-            <Collapse in={isHistoryVisible}>
-                <Box>
-                    {history.length === 0 ? (
-                        <Alert severity="info" sx={{ mt: 2 }}>No completed fasts found yet. Stop your current fast to log your first entry!</Alert>
-                    ) : (
-                        <List>
-                            {history.map((fast) => (
-                                <FastHistoryItem key={fast._id} fast={fast} onDelete={handleOpenDeleteConfirm} />
-                            ))}
-                        </List>
-                    )}
-                </Box>
-            </Collapse>
-
-            <Box sx={{ mt: 4, mb: 3, p: 2, border: '1px solid #444', borderRadius: '5px' }}>
-                <Typography variant="h6" gutterBottom color="secondary.main">
-                    Email Full History
-                </Typography>
-                <Box sx={{ display: 'flex', gap: 2, flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'center' }}>
-                    <Box sx={{ flex: '1 1 60%' }}>
-                        <TextField
-                            fullWidth
-                            label="Email Address"
-                            name="emailHistoryRecipient"
-                            type="email"
-                            variant="outlined"
-                            size="small"
-                            inputProps={{ autoComplete: 'new-password' }}
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            sx={{
-                                '& .MuiOutlinedInput-root': {
-                                    '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.23)' },
-                                    '&:hover fieldset': { borderColor: 'secondary.main' },
-                                    '&.Mui-focused fieldset': { borderColor: 'primary.main' },
-                                },
-                                '& .MuiInputLabel-root': { color: 'text.secondary' },
-                                '& .MuiInputBase-input': { color: 'white' }
-                            }}
-                        />
-                    </Box>
-                    <Box sx={{ flex: '0 0 160px' }}>
-                        <Button
-                            fullWidth
-                            variant="contained"
-                            color="primary"
-                            onClick={handleEmailHistory}
-                            disabled={history.length === 0 || !email || sendingEmail}
-                            startIcon={sendingEmail ? <CircularProgress size={20} color="inherit" /> : <Send />}
-                        >
-                            {sendingEmail ? 'Sending...' : 'Email All Fasts'}
-                        </Button>
-                    </Box>
-                </Box>
-                {(history.length === 0 || !email) && !sendingEmail && (
-                    <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                        * {history.length === 0 ? 'Log a completed fast' : 'Enter an email address'} to enable the email feature.
+            {/* 🎨 NEW: Unified Paper container for entire Fasting History */}
+            <Paper elevation={3} sx={{ p: 3, background: 'background.paper' }}>
+                {/* Header with title and controls */}
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+                    <Typography variant="h4" color="primary" sx={{ display: 'flex', alignItems: 'center', borderBottom: '2px solid', borderColor: 'secondary.main', pb: 1, pr: 2 }}>
+                        <Event sx={{ mr: 1 }} /> Fasting History
                     </Typography>
-                )}
-            </Box>
+
+                    <Button
+                        variant="outlined"
+                        onClick={handleToggleHistory}
+                        startIcon={isHistoryVisible ? <ExpandMoreIcon /> : <ChevronRightIcon />}
+                        size="small"
+                        color="secondary"
+                    >
+                        {isHistoryVisible ? 'Collapse' : 'Expand'} History
+                    </Button>
+                </Box>
+
+                <Collapse in={isHistoryVisible}>
+                    <Box>
+                        {history.length === 0 ? (
+                            <Alert severity="info" sx={{ mb: 3 }}>No completed fasts found yet. Stop your current fast to log your first entry!</Alert>
+                        ) : (
+                            <List sx={{ mb: 3 }}>
+                                {history.map((fast) => (
+                                    <FastHistoryItem key={fast._id} fast={fast} onDelete={handleOpenDeleteConfirm} />
+                                ))}
+                            </List>
+                        )}
+
+                        {/* 🎨 NEW: Email section moved inside Paper */}
+                        <Box sx={{ mt: 3, pt: 3, borderTop: '1px solid', borderColor: 'divider' }}>
+                            <Typography variant="h6" gutterBottom color="secondary.main" sx={{ mb: 2 }}>
+                                <Send sx={{ fontSize: 20, verticalAlign: 'middle', mr: 1 }} />
+                                Email Full History
+                            </Typography>
+                            <Box sx={{ display: 'flex', gap: 2, flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'center' }}>
+                                <Box sx={{ flex: '1 1 60%' }}>
+                                    <TextField
+                                        fullWidth
+                                        label="Email Address"
+                                        name="emailHistoryRecipient"
+                                        type="email"
+                                        variant="outlined"
+                                        size="small"
+                                        inputProps={{ autoComplete: 'new-password' }}
+                                        value={email}
+                                        onChange={(e) => setEmail(e.target.value)}
+                                        sx={{
+                                            '& .MuiOutlinedInput-root': {
+                                                '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.23)' },
+                                                '&:hover fieldset': { borderColor: 'secondary.main' },
+                                                '&.Mui-focused fieldset': { borderColor: 'primary.main' },
+                                            },
+                                            '& .MuiInputLabel-root': { color: 'text.secondary' },
+                                            '& .MuiInputBase-input': { color: 'white' }
+                                        }}
+                                    />
+                                </Box>
+                                <Box sx={{ flex: '0 0 160px' }}>
+                                    <Button
+                                        fullWidth
+                                        variant="contained"
+                                        color="primary"
+                                        onClick={handleEmailHistory}
+                                        disabled={history.length === 0 || !email || sendingEmail}
+                                        startIcon={sendingEmail ? <CircularProgress size={20} color="inherit" /> : <Send />}
+                                    >
+                                        {sendingEmail ? 'Sending...' : 'Email All'}
+                                    </Button>
+                                </Box>
+                            </Box>
+                            {(history.length === 0 || !email) && !sendingEmail && (
+                                <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                                    * {history.length === 0 ? 'Log a completed fast' : 'Enter an email address'} to enable the email feature.
+                                </Typography>
+                            )}
+                        </Box>
+                    </Box>
+                </Collapse>
+            </Paper>
 
             <Snackbar
                 open={snackbarOpen}
