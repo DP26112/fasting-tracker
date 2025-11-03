@@ -56,15 +56,18 @@ const EMAIL_PASS = process.env.EMAIL_PASS;  
 
 // Configure the Nodemailer Transporter
 const transporter = nodemailer.createTransport({
-    service: 'gmail', 
-    auth: {
-        user: EMAIL_USER,
-        pass: EMAIL_PASS 
-    }
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false, // use TLS
+    auth: {
+        user: EMAIL_USER,
+        pass: EMAIL_PASS 
+    },
+    connectionTimeout: 10000, // 10 seconds
+    greetingTimeout: 10000,
+    socketTimeout: 10000
 });
-// ----------------------------------------
-
-// --- Helper: format dates like frontend: MM/DD/YY | h:mm AM/PM ---
+// ----------------------------------------// --- Helper: format dates like frontend: MM/DD/YY | h:mm AM/PM ---
 function pad2(n) { return n < 10 ? '0' + n : '' + n; }
 function formatNoteTimestamp(dateInput) {
     const d = new Date(dateInput);
