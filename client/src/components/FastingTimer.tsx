@@ -17,8 +17,9 @@ import AdditionalEmailInput from './AdditionalEmailInput';
 import type { AdditionalEmailInputHandle } from './AdditionalEmailInput';
 
 // 🔑 UPDATED IMPORTS: Use centralized types
-import type { Note, FastType } from '../types'; 
+import type { Note } from '../types'; 
 import { useAuthStore } from '../store/authStore';
+import { useActiveFastStore } from '../store/useActiveFastStore'; // 🔥 NEW: Zustand store for persistence
 
 import LiveFastDuration from './LiveFastDuration';
 import FastNoteInput from './FastNoteInput';
@@ -51,19 +52,25 @@ interface FastingTimerProps {
 
 const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) => {
     // --- State Variables ---
-    // Use auth info to namespace localStorage keys per-user (prevents the same timer appearing for different users)
     const user = useAuthStore(state => state.user);
     const isAuthenticated = useAuthStore(state => state.isAuthenticated);
-    // Prefer a stable per-user id when available. Use 'guest' for unauthenticated sessions.
-    const storageId = user?.id ?? 'guest';
-    const storageKeyStart = `fastStartTime:${storageId}`;
-    const storageKeyType = `fastType:${storageId}`;
-    const storageKeyNotes = `fastNotes:${storageId}`;
-
-    const [isFasting, setIsFasting] = useState<boolean>(() => !!localStorage.getItem(storageKeyStart));
-    const [startTime, setStartTime] = useState<string | null>(() => localStorage.getItem(storageKeyStart) || null);
-    const [fastType, setFastType] = useState<FastType>(() => (localStorage.getItem(storageKeyType) as FastType) || 'wet');
-    const [notes, setNotes] = useState<Note[]>(() => JSON.parse(localStorage.getItem(storageKeyNotes) || '[]'));
+    
+    // 🔥 NEW: Use Zustand store for fast state instead of local useState + localStorage
+    const { 
+        isFasting, 
+        startTime, 
+        fastType: activeFastType, 
+        notes,
+        startFast: startFastAction,
+        stopFast: stopFastAction,
+        addNote: addNoteAction,
+        deleteNote: deleteNoteAction
+    } = useActiveFastStore();
+    
+    // Local state for UI controls (before starting fast)
+    const [selectedFastType, setSelectedFastType] = useState<'wet' | 'dry'>('wet');
+    const fastType = isFasting ? activeFastType : selectedFastType; // Use active fast type when fasting, otherwise use selected
+    
     const [customTimeInput, setCustomTimeInput] = useState<string>('');
     const [showCustomTime, setShowCustomTime] = useState<boolean>(false);
     
@@ -92,38 +99,8 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
     const additionalEmailRef = useRef<AdditionalEmailInputHandle | null>(null);
     // no local schedule id tracked anymore (modal removed)
 
-
-    // --- Core Logic: Persistence ---
-    useEffect(() => {
-        if (startTime) {
-            setIsFasting(true);
-        }
-    }, [isFasting, startTime]);
-
-    // Persist per-user timer state to namespaced localStorage keys
-    useEffect(() => {
-        if (isFasting && startTime) {
-            localStorage.setItem(storageKeyStart, startTime);
-            localStorage.setItem(storageKeyType, fastType);
-            localStorage.setItem(storageKeyNotes, JSON.stringify(notes));
-        } else if (!isFasting && !startTime) {
-            localStorage.removeItem(storageKeyStart);
-            localStorage.removeItem(storageKeyType);
-            localStorage.removeItem(storageKeyNotes);
-        }
-    }, [isFasting, startTime, fastType, notes, storageKeyStart, storageKeyType, storageKeyNotes]);
-
-    // When the active user/token changes, reload the timer state from that user's storage keys
-    useEffect(() => {
-        setStartTime(localStorage.getItem(storageKeyStart) || null);
-        setFastType((localStorage.getItem(storageKeyType) as FastType) || 'wet');
-        try {
-            setNotes(JSON.parse(localStorage.getItem(storageKeyNotes) || '[]'));
-        } catch {
-            setNotes([]);
-        }
-        setIsFasting(!!localStorage.getItem(storageKeyStart));
-    }, [storageKeyStart, storageKeyType, storageKeyNotes]);
+    // 🔥 REMOVED: All localStorage persistence - now handled by Zustand store
+    // The useActiveFastStore automatically syncs with the server
 
     // --- Live-updating currentHours for trophy rendering ---
     const [currentHours, setCurrentHours] = useState<number>(0);
@@ -150,21 +127,19 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
 
     // --- Action Handlers ---
 
-    const handleStartFast = (time: string) => {
-        setStartTime(time);
-        setIsFasting(true);
-        setNotes([]);
+    const handleStartFast = async (time: string) => {
         setCustomTimeInput('');
-        // Persist active fast to server if authenticated
-        (async () => {
-            if (!isAuthenticated) return;
-            try {
-                await api.post('/active-fast', { startTime: time, fastType, notes: [] });
-            } catch (err) {
-                console.error('Failed to persist active fast to server:', err);
-                // ignore; local storage still keeps the active timer
-            }
-        })();
+        // 🔥 NEW: Use Zustand store action to persist to server
+        if (!isAuthenticated) return;
+        try {
+            await startFastAction(time, fastType);
+            console.log('✅ Fast started successfully');
+        } catch (err) {
+            console.error('❌ Failed to start fast:', err);
+            setSnackbarMessage('Failed to start fast. Please try again.');
+            setSnackbarSeverity('error');
+            setSnackbarOpen(true);
+        }
     };
 
     const handleStartNow = () => {
@@ -217,83 +192,67 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
         setIsStopConfirmOpen(false);
         setIsSaving(true);
 
-    const finalHoursFasted = currentHours;
+        const finalHoursFasted = currentHours;
         const endTime = new Date().toISOString();
 
-        // Optimistically stop the timer in the UI immediately so the user sees it end
-        const prevState = { startTime, notes, isFasting };
-        setIsFasting(false);
-        setStartTime(null);
-        setNotes([]);
-        // If the user is not authenticated, roll back and inform them
         if (!isAuthenticated) {
-            // rollback
-            setIsFasting(!!prevState.startTime);
-            setStartTime(prevState.startTime);
-            setNotes(prevState.notes);
             setIsSaving(false);
-            console.info('🔒 You must be logged in to save your fast.');
+            setSnackbarMessage('You must be logged in to save your fast.');
+            setSnackbarSeverity('warning');
+            setSnackbarOpen(true);
             return;
         }
+
+        // 🔥 NEW: Use Zustand store action to stop fast and save to history
         try {
-            await api.post('/save-fast', {
-                startTime: prevState.startTime,
-                endTime,
-                durationHours: finalHoursFasted,
-                fastType,
-                // send a reversed COPY of notes so we don't mutate state via Array.prototype.reverse()
-                notes: [...prevState.notes].reverse(),
-            });
-
-            // on success, clear any active-fast stored on the server
-            try { await api.delete('/active-fast'); } catch (err) { console.error('Failed to clear active fast on server:', err); }
-
-            console.log(`✅ Fast successfully stopped and logged to history! Duration: ${finalHoursFasted.toFixed(2)} hours.`);
-            onFastLogged();
-
-        } catch (error) {
-            console.error('Failed to save fast:', error);
-
-            console.error('⚠️ Failed to save fast to history (server error). The timer was stopped locally.');
-
-            // If save failed due to network, queue the save locally for later sync
-            try {
-                const pendingKey = `pendingSaves:${storageId}`;
-                const existing = JSON.parse(localStorage.getItem(pendingKey) || '[]');
-                existing.push({ id: nanoid(8), payload: { startTime: prevState.startTime, endTime, durationHours: finalHoursFasted, fastType, notes: [...prevState.notes].reverse() }, createdAt: new Date().toISOString() });
-                localStorage.setItem(pendingKey, JSON.stringify(existing));
-                console.info('⚠️ Save queued locally and will sync when online or after login.');
-            } catch (e) {
-                console.error('Failed to queue pending save:', e);
+            const success = await stopFastAction(endTime, finalHoursFasted);
+            if (success) {
+                console.log(`✅ Fast successfully stopped and logged! Duration: ${finalHoursFasted.toFixed(2)} hours.`);
+                onFastLogged();
+                setSnackbarMessage('Fast logged successfully!');
+                setSnackbarSeverity('success');
+                setSnackbarOpen(true);
+            } else {
+                console.error('⚠️ Failed to save fast to history');
+                setSnackbarMessage('Failed to save fast. Please try again.');
+                setSnackbarSeverity('error');
+                setSnackbarOpen(true);
             }
-
-            // Note: we intentionally do NOT automatically restore the prior timer state here to avoid surprising UX.
-            // If you prefer rollback on failure, we can restore prevState here instead.
+        } catch (error) {
+            console.error('Failed to stop fast:', error);
+            setSnackbarMessage('Error stopping fast. Please try again.');
+            setSnackbarSeverity('error');
+            setSnackbarOpen(true);
         } finally {
             setIsSaving(false);
         }
     };
 
-    const handleNoteAddition = useCallback((noteText: string) => {
-        if (noteText.trim() && isFasting) {
+    const handleNoteAddition = useCallback(async (noteText: string) => {
+        if (noteText.trim() && isFasting && isAuthenticated) {
             const currentTimeISO = new Date().toISOString();
             const currentFastDuration = currentHours;
 
-            const newNote: Note = { // Note type is now imported
+            const newNote: Note = {
                 id: nanoid(10),
                 time: currentTimeISO,
                 text: noteText.trim(),
                 fastHours: currentFastDuration,
                 dayOfMonth: getDate(new Date(currentTimeISO)),
-                // 💡 NOTE: The centralized Note interface in types.ts only has 'time', 'text', and 'duration'.
-                // The fields 'id', 'fastHours', and 'dayOfMonth' are currently unique to the component state here.
-                // We'll keep them here for now, but note that the local object is technically an extended version of the imported type.
-                // To fully align, we should update the Note interface in src/types.ts to include 'id', 'fastHours', and 'dayOfMonth'.
-                // For now, this is sufficient to resolve the cleanup step.
             };
-            setNotes(prev => [newNote, ...prev]);
+            
+            // � NEW: Use Zustand store action to persist note to server
+            try {
+                await addNoteAction(newNote);
+                console.log('✅ Note added successfully');
+            } catch (err) {
+                console.error('❌ Failed to add note:', err);
+                setSnackbarMessage('Failed to add note. Please try again.');
+                setSnackbarSeverity('error');
+                setSnackbarOpen(true);
+            }
         }
-    }, [isFasting, currentHours]);
+    }, [isFasting, currentHours, isAuthenticated, addNoteAction, setSnackbarMessage, setSnackbarSeverity, setSnackbarOpen]);
 
     // 1. Delete Note: Open Dialog
     const handleOpenDeleteNoteConfirm = useCallback((noteId: string) => {
@@ -302,13 +261,22 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
     }, []);
 
     // 2. Delete Note: Confirm Action
-    const handleConfirmDeleteNote = () => {
-        if (!noteIdToDelete) return;
+    const handleConfirmDeleteNote = async () => {
+        if (!noteIdToDelete || !isAuthenticated) return;
 
-        setNotes(prevNotes => prevNotes.filter(note => note.id !== noteIdToDelete));
-        
-        // Show a slightly longer confirmation so users notice it if they don't click the close 'x'
-    console.log('🗑️ Note deleted.');
+        // 🔥 NEW: Use Zustand store action to delete note from server
+        try {
+            await deleteNoteAction(noteIdToDelete);
+            console.log('🗑️ Note deleted successfully');
+            setSnackbarMessage('Note deleted');
+            setSnackbarSeverity('info');
+            setSnackbarOpen(true);
+        } catch (err) {
+            console.error('❌ Failed to delete note:', err);
+            setSnackbarMessage('Failed to delete note. Please try again.');
+            setSnackbarSeverity('error');
+            setSnackbarOpen(true);
+        }
 
         setIsDeleteNoteConfirmOpen(false);
         setNoteIdToDelete(null);
@@ -546,40 +514,8 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
 
     // Email sending is handled by the EmailStatusDialog component now.
 
-
+    // 🔥 REMOVED: Pending saves sync - Zustand store handles all persistence to server
     // --- Component JSX ---
-    // Sync pending saves when user logs in or when browser regains connectivity
-    useEffect(() => {
-        let mounted = true;
-
-        const syncPending = async () => {
-            if (!isAuthenticated) return;
-            const pendingKey = `pendingSaves:${storageId}`;
-            const existing = JSON.parse(localStorage.getItem(pendingKey) || '[]');
-            if (!existing || existing.length === 0) return;
-
-            for (const item of existing) {
-                try {
-                    await api.post('/save-fast', item.payload);
-                    // on success remove this item
-                    const remaining = JSON.parse(localStorage.getItem(pendingKey) || '[]').filter((p: any) => p.id !== item.id);
-                    localStorage.setItem(pendingKey, JSON.stringify(remaining));
-                } catch (err) {
-                    console.error('Sync failed for pending save:', err);
-                    // stop retrying this run
-                    break;
-                }
-            }
-        };
-
-        // Attempt sync on mount if authenticated
-        if (isAuthenticated && mounted) syncPending();
-
-        const onOnline = () => { if (isAuthenticated) syncPending(); };
-        window.addEventListener('online', onOnline);
-
-        return () => { mounted = false; window.removeEventListener('online', onOnline); };
-    }, [isAuthenticated, storageId]);
 
     // cleanup sendSuccess timer on unmount
     useEffect(() => {
@@ -666,7 +602,7 @@ const FastingTimer: React.FC<FastingTimerProps> = ({ onFastLogged, darkTheme }) 
                             <ToggleButtonGroup
                                 value={fastType}
                                 exclusive
-                                onChange={(_, newType) => newType && setFastType(newType)}
+                                onChange={(_, newType) => newType && !isFasting && setSelectedFastType(newType as 'wet' | 'dry')}
                                 size="small"
                                 fullWidth
                                 sx={{ mb: 0 }}
