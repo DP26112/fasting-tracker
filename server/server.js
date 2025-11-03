@@ -1199,18 +1199,15 @@ const clientDistPath = path.join(__dirname, '..', 'client', 'dist');
 console.log('Serving static files from:', clientDistPath);
 app.use(express.static(clientDistPath));
 
-// Serve index.html for all non-API routes (SPA fallback)
-app.get('*', (req, res) => {
-    // Don't serve index.html for API routes or if the request path looks like an API call
-    if (req.path.startsWith('/api/')) {
-        return res.status(404).json({ message: `Not Found: ${req.originalUrl}` });
-    }
-    res.sendFile(path.join(clientDistPath, 'index.html'));
-});
-
 // 404 handler for API routes that weren't matched
-app.use('/api/*', (req, res) => {
+app.use('/api', (req, res) => {
     console.warn(`404 - No API route matched for ${req.method} ${req.originalUrl}`);
     res.status(404).json({ message: `Not Found: ${req.originalUrl}` });
+});
+
+// Serve index.html for all other routes (SPA fallback)
+// This catches all routes that aren't API or static files
+app.use((req, res) => {
+    res.sendFile(path.join(clientDistPath, 'index.html'));
 });
 
