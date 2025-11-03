@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import axios, { AxiosError } from 'axios';
+import { isTokenExpired, logTokenDebugInfo } from '../utils/tokenValidation';
 
 // Minimal User type to avoid TS errors (project may define a richer type in ../types)
 type User = {
@@ -20,10 +21,10 @@ type AuthStore = {
   login: (email: string, password: string) => Promise<boolean>;
   loginWithToken: (token: string, user?: User | null) => void;
   logout: () => void;
-  initializeAuth: () => Promise<void> | void;
+  initializeAuth: () => Promise<void>;
 };
 
-const API_BASE = 'http://localhost:3001/api';
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 export const useAuthStore = create<AuthStore>((set, get) => {
   // call get() once to avoid unused-parameter errors; harmless read
@@ -32,9 +33,9 @@ export const useAuthStore = create<AuthStore>((set, get) => {
 
   return {
     user: null,
-  token: localStorage.getItem('token'),
-  isAuthenticated: false, // will be set after initializeAuth verifies or refreshes
-    isLoading: false,
+    token: null, // Don't read from localStorage here - wait for initializeAuth
+    isAuthenticated: false, // Start as false until properly initialized
+    isLoading: true, // Start in loading state to block rendering
     authError: null,
 
     // Login using email + password
@@ -50,13 +51,14 @@ export const useAuthStore = create<AuthStore>((set, get) => {
         }
 
         localStorage.setItem('token', token);
+        console.log('✅ Login successful - token saved to localStorage');
         set({ token, user: user || null, isAuthenticated: true, isLoading: false, authError: null });
         return true;
       } catch (err) {
         const errResp: any = (err as AxiosError).response;
         const errorMessage = errResp?.data?.message || 'Login failed: Invalid credentials.';
         set({ authError: errorMessage, isLoading: false });
-        console.error('Login failed:', (err as AxiosError).message);
+        console.error('❌ Login failed:', (err as AxiosError).message);
         return false;
       }
     },
@@ -64,38 +66,76 @@ export const useAuthStore = create<AuthStore>((set, get) => {
     // Use an existing token (e.g. right after registration)
     loginWithToken: (token: string, user: User | null = null) => {
       localStorage.setItem('token', token);
+      console.log('✅ Token login - token saved to localStorage');
       set({ token, user, isAuthenticated: true, authError: null, isLoading: false });
     },
 
     logout: () => {
       localStorage.removeItem('token');
+      console.log('🚪 Logout - token removed from localStorage');
       set({ token: null, user: null, isAuthenticated: false });
+      
+      // Note: Active fast store will be cleared via resetFast() call in App.tsx
+      // to avoid circular dependencies between stores
     },
 
-    // Optional: initialize on app start (can be called from App or main)
+    // CRITICAL: Async initialization that blocks app rendering until complete
     initializeAuth: async () => {
-      // Attempt to obtain an access token using httpOnly refresh cookie via /auth/refresh
-      try {
-        const resp = await axios.post(`${API_BASE}/auth/refresh`, {}, { withCredentials: true });
-        const accessToken = resp.data?.accessToken || null;
-        if (accessToken) {
-          // Optionally we can fetch /auth/me for user info
-          try {
-            const me = await axios.get(`${API_BASE}/auth/me`, { headers: { Authorization: `Bearer ${accessToken}` } });
-            const user = me.data?.user ?? null;
-            set({ token: accessToken, user, isAuthenticated: true });
-            return;
-          } catch (meErr) {
-            // If /auth/me fails, still set token so subsequent calls can use it
-            set({ token: accessToken, isAuthenticated: true });
-            return;
-          }
-        }
-      } catch (err) {
-        // No refresh cookie or refresh failed
-        console.warn('initializeAuth: refresh failed or not present; remaining logged out');
+      console.log('🔄 Starting auth initialization...');
+      logTokenDebugInfo(); // Log comprehensive token info for debugging
+      
+      set({ isLoading: true });
+      
+      // Small delay to ensure localStorage is ready on mobile browsers
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      const token = localStorage.getItem('token');
+      
+      if (!token) {
+        console.log('ℹ️ No token found - user is not authenticated');
+        set({ isLoading: false, isAuthenticated: false });
+        return;
       }
-      set({ token: null, user: null, isAuthenticated: false });
+
+      console.log(`📦 Token found (length: ${token.length})`);
+
+      // Check if token is expired before using it
+      if (isTokenExpired(token)) {
+        console.warn('⚠️ Token is expired - clearing and logging out');
+        localStorage.removeItem('token');
+        set({ token: null, user: null, isAuthenticated: false, isLoading: false });
+        return;
+      }
+
+      console.log('✅ Token is valid and not expired');
+
+      // Verify token with server to ensure it's still valid
+      try {
+        console.log('🔐 Verifying token with server...');
+        
+        // Create a one-time axios instance with the token to verify it
+        const response = await axios.get(`${API_BASE}/user-status`, {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+
+        const { userId, email } = response.data;
+        console.log('✅ Token verified with server - user authenticated:', email);
+        
+        set({ 
+          token, 
+          user: { id: userId, email },
+          isAuthenticated: true, 
+          isLoading: false,
+          authError: null 
+        });
+      } catch (error) {
+        console.error('❌ Token verification failed - logging out', error);
+        // Token is invalid - clear it
+        localStorage.removeItem('token');
+        set({ token: null, user: null, isAuthenticated: false, isLoading: false });
+      }
     },
   };
 });
