@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  fasting_app:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    image: fasting-tracker:latest
+    restart: always
+    networks:
+      web_proxy_net:
+        aliases:
+          - fasting_app # This sets the alias you tried to add manually
+      fasting_net:
+    
+    expose: # This line might not be strictly necessary, but it's good practice
+      - "8080" # Exposes the app's port *inside* Docker
+    environment:
+      - NODE_ENV=production
+      - PORT=8080
+      - MONGO_URI=mongodb+srv://ddp1329:Clifton84@fastingapp.ydw8swt.mongodb.net/fastingDB?retryWrites=true&w=majority&appName=fastingApp
+      - JWT_SECRET=2e30fc24a71466b640c994f53cb275ad8838fa824399be92d23f21993fa3a62e
+      - EMAIL_USER=ddp1329@gmail.com
+      - EMAIL_PASS=abdpripvvcczmzfe
+      - SMTP_HOST=smtp.gmail.com
+      - SMTP_PORT=587
+      - NODE_TLS_REJECT_UNAUTHORIZED=0
+
+networks:
+  fasting_net:
+    driver: bridge
+  web_proxy_net:
+    external: true
+
+# Notes:
+# - Ensure you set environment variables in an env file or your host environment
+#   (MONGO_URI, JWT_SECRET, EMAIL_USER, EMAIL_PASS). Do NOT commit secrets to git.
+# - The client build must exist at client/dist; Dockerfile.server copies that into the image.
