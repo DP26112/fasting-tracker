@@ -84,7 +84,7 @@ const DebugPanel: React.FC = () => {
                   <strong>Token Details</strong>
                 </Typography>
                 <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem', mb: 1 }}>
-                  User ID: {debugInfo.payload.userId || 'N/A'}
+                  User ID: {debugInfo.payload.id || debugInfo.payload.userId || 'N/A'}
                 </Typography>
                 <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem', mb: 1 }}>
                   Email: {debugInfo.payload.email || 'N/A'}

@@ -6,7 +6,8 @@
  */
 
 interface TokenPayload {
-  userId?: string;
+  id?: string;  // JWT uses 'id' not 'userId'
+  userId?: string;  // Keep for backwards compatibility
   email?: string;
   exp: number;
   iat?: number;
