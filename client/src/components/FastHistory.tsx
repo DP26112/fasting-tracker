@@ -174,12 +174,12 @@ const FastHistory: React.FC = () => {
 
     return (
         <Box sx={{ mt: 5 }}>
-            {/* 🎨 NEW: Unified Paper container for entire Fasting History */}
-            <Paper elevation={3} sx={{ p: 3, background: 'background.paper' }}>
+            {/* 🎨 Unified Paper container matching Fast Notes styling */}
+            <Paper elevation={3} sx={{ p: 3, background: (theme) => theme.palette.background.paper }}>
                 {/* Header with title and controls */}
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-                    <Typography variant="h4" color="primary" sx={{ display: 'flex', alignItems: 'center', borderBottom: '2px solid', borderColor: 'secondary.main', pb: 1, pr: 2 }}>
-                        <Event sx={{ mr: 1 }} /> Fasting History
+                    <Typography variant="h6" color="primary" sx={{ display: 'flex', alignItems: 'center', borderBottom: '2px solid', borderColor: 'secondary.main', pb: 1, pr: 2 }}>
+                        <Event sx={{ verticalAlign: 'middle', mr: 1 }} /> Fasting History
                     </Typography>
 
                     <Button
